@@ -12,26 +12,26 @@ Kairos is a local-first, macOS **human-time kernel**. It records the time you ar
 
 ```
    resident daemon (lean)                          events (append-only,
-   ┌────────────────────────┐   POST /events        sole source of truth)
+   ┌────────────────────────┐   events.post         sole source of truth)
    │ idle sampler ──────────┼──────────────────▶  ┌──────────────────────┐
    │ socket ingest ◀────────┼── clients (any lang)│  ~/.kairos/kairos.db  │
    │ menu-bar (owner view)  │                      └──────────┬───────────┘
    └────────────────────────┘                                 │ read-time
                                                               ▼
-                                              attribution library (computes
-                                              segments on demand — nothing
-                                              materialized)
+                                              KairosCore (daemon-internal;
+                                              computes segments on demand —
+                                              nothing materialized)
                                                               │
-              GET /segments  ──or──  `kairos export`  ────────┘  → JSON
+              segments.get  ──or──  `kairos export`  ────────┘  → JSON
                                                               │
-   external consumers (any language): per-client timesheets, API delivery,
-   LLM summaries — all outside the core.
+   external consumers (Python/Node SDK): per-client timesheets,
+   API delivery, LLM summaries — all outside the core.
 ```
 
 - **`kairosd`** — a lean Swift `LaunchAgent` daemon. Its *only* resident jobs: sample system idle → append AFK events, accept client events over a local socket, host a menu-bar status item. **Zero special permissions** (no Accessibility, no Automation).
-- **Events are the sole source of truth.** Segments (attributed active-time blocks) are **computed on demand** by a shared attribution library — never stored/materialized.
-- **Clients** are external processes that speak the protocol (HTTP over a Unix socket, or the `kairos` CLI). `kairos-cc` is a Claude Code plugin reporting `Stop` / `UserPromptSubmit`. Writing a new client in any language extends what Kairos tracks.
-- **Consumers** read segments via `GET /segments` or `kairos export` and render timesheets. Formatting, per-client templates, and API delivery live **outside the core**.
+- **Events are the sole source of truth.** Segments (attributed active-time blocks) are **computed on demand** by the daemon-internal attribution library (`KairosCore`) — never stored/materialized, and not exposed via FFI.
+- **Clients** are external processes that speak the protocol (line-JSON RPC over a Unix socket, or the `kairos` CLI). `kairos-claude-code` is a Claude Code plugin reporting `Stop` / `UserPromptSubmit`. Writing a new client in any language extends what Kairos tracks.
+- **Consumers** read segments via the **Python/Node SDK** (or `kairos export`) and render timesheets. Formatting, per-client templates, and API delivery live **outside the core**.
 
 ## Documentation
 
@@ -41,7 +41,7 @@ Kairos is a local-first, macOS **human-time kernel**. It records the time you ar
 4. [Attribution](./docs/04-attribution.md) — how active time is assigned to activities *(the core)*
 5. [Protocol](./docs/05-protocol.md) — the language-agnostic client/consumer interface (socket + CLI)
 6. [Daemon design](./docs/06-daemon.md) — idle kernel, socket server, menu bar, launchd
-7. [Clients](./docs/07-clients.md) — `kairos-cc`, manual/meeting, the extension model
+7. [Clients](./docs/07-clients.md) — `kairos-claude-code`, manual/meeting, the extension model
 8. [Consumers & summarizer](./docs/08-summarizer.md) — timesheet generation as an external concern
 9. [Roadmap](./docs/09-roadmap.md) — milestones, MVP scope, open decisions, ADRs
 

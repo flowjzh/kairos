@@ -47,7 +47,7 @@ This is a hard design constraint, not a nice-to-have.
 |---|---|---|
 | System-wide idle (AFK) | `CGEventSource.secondsSinceLastEventType` (fallback `ioreg HIDIdleTime`) | **None** (verified on this machine) |
 | Menu-bar status item | `NSStatusItem` (AppKit) | **None** |
-| Per-source events | HTTP over a Unix domain socket | **None** (local IPC, same-user file perms) |
+| Per-source events | line-JSON RPC over a Unix domain socket | **None** (local IPC, same-user file perms) |
 
 Because attribution is **intent-based** (submit / explicit start), Kairos never needs to read window titles or inspect other apps — so it avoids the Accessibility/Automation permissions that a focus-tracking approach would require. Multi-session precision within one terminal app (e.g. several Claude splits in one Ghostty window) is resolved by the submit-heuristic and manual override, **not** by window introspection.
 

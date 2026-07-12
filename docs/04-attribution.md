@@ -1,91 +1,115 @@
 # 04 — Attribution
 
-Attribution answers: *given a stretch of active (non-AFK) time, which activity does it belong to?* This is the conceptual core of Kairos. It is a **pure, read-time computation** over the immutable event log — segments are produced in memory when asked for and never stored (see [03](./03-data-model.md)).
+Attribution answers: *given a stretch of time, which activity does it belong to, and how much of it was genuine human presence?* This is the conceptual core of Kairos — a **pure, read-time computation** over the immutable event log. Segments are produced in memory when asked for and never stored (see [03](./03-data-model.md)).
 
 ## Inputs (all from the one event log)
 
-- The **global non-AFK timeline**: intervals between `afk_off` and the next `afk_on`, minus `pause_on/off` spans.
-- **Activity events**: explicit bounds (`activity_open/close`, for manual/meeting) or interpreted signals (`cc_stop`/`cc_submit`).
-- **Overrides**: `force_owner`, `pause_*` — ordinary events in the same log, so they are captured by the same computation (and the same snapshot watermark).
+- **Activity windows:** ai closed windows `[activity_open | ai_stop, ai_submit]`; explicit `[activity_open, activity_close]` (meetings, manual).
+- **Global exclusions:** `afk` spans (`afk_on`→`afk_off`, carrying a `reason`) and manual `pause` spans (`pause_on`→`pause_off`).
+- **Overrides:** `force_owner`.
 
-## Two strategies
+## Strategy dispatch — inferred from the event signature, not the source
 
-Attribution is a **pluggable strategy registry** keyed by `source` (+ version). Two ship in v1.
+The strategy is chosen **per activity from its events**, not from its `source`:
 
-### A. Explicit-bounds (default; covers meeting / manual / generic)
+- An activity that has `ai_submit` events → **ai submit-anchored**.
+- Otherwise (only `activity_open`/`activity_close`) → **explicit-bounds**.
 
-An activity is opened at `t_open` and closed at `t_close`. Its segments are the intersection with the non-AFK timeline:
+The registry maps **strategy-name (+ `attribution_version`)** → implementation. Adding a new AI agent (`cursor`) requires **no code change**: it emits `ai_stop`/`ai_submit` with `source_id` → `sources.slug = 'cursor'`, and the ai strategy handles any activity with `ai_*` events. (Adding a genuinely *new* strategy kind is a code change — warranted.)
 
-```
-segments(activity) = nonAFK ∩ [t_open, t_close]
-```
+## The precedence model (exclusive, with one concurrent exception)
 
-Zero inference. Any future client that knows its own start/stop gets correct attribution for free.
-
-### B. CC submit-anchored (Claude Code)
-
-A Claude session's *human-work window* is **between the AI finishing (`cc_stop`) and the user submitting the next prompt (`cc_submit`)** — including browser research, reading, and thinking. Claude's window need **not** be focused.
-
-The disambiguator across concurrent sessions is the submit itself: **active time preceding a submit belongs to the submitted session.** Submits across all sessions are processed in global time order, which partitions time with no overlaps.
+Attribution is governed by a strict precedence. At any moment, time belongs to the highest-precedence claimant present; lower-precedence claimants are **holed** (displaced) by higher ones — **except** when a hole would erase a lower interval entirely, in which case both are recorded concurrently.
 
 ```
-let submits = all cc_submit events, sorted ascending by ts
-let prev = -inf
-for each submit s in submits:           # s.session = X, s.ts = T
-    lastStop_X = most recent cc_stop(X) before T   # (session start if none)
-    start = max(prev, lastStop_X)        # trim AI-execution that preceded X's Stop
-    for each nonAFK interval I overlapping [start, T]:
-        yield Segment(activity = X,
-                     start = max(I.start, start),
-                     end   = min(I.end,   T),
-                     rule  = "cc_submit")
-    prev = T
+manual pause  >  explicit [open,close]  >  afk  >  ai closed window
 ```
 
-**Correct-by-construction:**
-- **No double-counting:** consecutive submits partition the timeline; each chunk goes to exactly one session.
-- **AI time excluded:** `start = max(prev, lastStop_X)` drops the window where X's AI was still executing.
-- **Away time excluded:** only `nonAFK` intervals are attributed.
-- **Off-app research counted:** browsing between `cc_stop` and `cc_submit` without going AFK is attributed to the session — exactly as intended.
+### The holing rule
 
-### Manual overrides
+For two overlapping intervals of **different precedence** (higher `H`, lower `L`), both being activities:
 
-- `pause_on/off` → treated identically to AFK (entertainment/unrelated excluded).
-- `force_owner(X)` → within the current open gap (since the last submit), attribute active time to X regardless of heuristics, until the next submit or override.
+- **If `L ⊆ H`** (L fully contained in H — punching would erase L entirely → *the hole does not hold*): record **both concurrently**. L is a genuine sub-effort embedded in H.
+- **Otherwise** (partial overlap, or `H ⊆ L`): **H punches a hole in L** — H is recorded in full; L loses the overlap and keeps its parts outside H.
+
+For **afk / pause** (holes, not activities): they always punch lower-precedence activities; they are never "concurrent." (`explicit` is **immune to afk** — a meeting counts its full span even if you were idle; only `pause` holes it. ai windows cannot be fully inside an afk span because an `ai_submit` is a human action, hence non-afk.)
+
+For **same-precedence activities**: see per-strategy resolution below (ai-vs-ai by submit-priority; explicit-vs-explicit concurrent).
+
+## Strategies
+
+Two ship in v1.
+
+### A. Explicit-bounds (default; meeting / manual / generic)
+
+An activity opened at `activity_open` and closed at `activity_close`. Its window is `[activity_open, activity_close]`, holed **only by `pause`** (immune to afk and ai):
+
+```
+explicit_segments(activity) = [activity_open, activity_close] − pause_spans
+```
+
+Zero inference. Any future client that knows its own start/stop gets correct attribution for free. Explicit-vs-explicit overlap (two meetings) is concurrent (both kept; rare — consumer resolves). Explicit-vs-ai uses the holing rule above.
+
+### B. AI submit-anchored (AI coding agents)
+
+An AI agent session's *human-work window* is **between the agent finishing (`ai_stop`, or `activity_open` for the first turn) and the user submitting the next prompt (`ai_submit`)** — including browser research, reading, and thinking. The window need **not** be focused.
+
+**Only closed windows are counted.** An `ai_stop` with no following `ai_submit` (the open tail) is **not counted** — most likely the task was finished and the stop was the natural end. If you resume and submit, the window closes normally.
+
+```
+ai_window(turn) = [activity_open | ai_stop, ai_submit]     # the submit closes it
+```
+
+**Overlap resolution (ai-vs-ai, same precedence) = submit-priority.** When two ai windows overlap, the one **submitted earlier** owns the overlap; the other is trimmed. This nesting fixes the flat model's left-bound bug (see worked example).
+
+**No machine-window concept.** `[ai_submit, next ai_stop]` (the agent grinding) is simply *not an ai window* — it is unattributed to that session, and time there is claimed only if another session's window covers it (you can work on A while B grinds). There is no separate "machine window excludes everyone" rule.
+
+### force_owner (manual override)
+
+`force_owner(activity)` asserts that this activity owns the current gap regardless of heuristics. It produces a window `[force_owner.ts, next ai_submit | next force_owner | activity_close]` that wins ai-vs-ai overlaps (highest precedence within ai). Escape hatch for intra-gap ambiguity (see limits).
+
+## Attribution procedure (layered)
+
+1. **Build explicit windows** `[activity_open, activity_close] − pause` (immune to afk, ai).
+2. **Build ai closed windows** `[activity_open | ai_stop, ai_submit]`.
+3. **Resolve ai-vs-ai** by submit-priority (earlier submit wins overlaps) → a set of non-overlapping ai claims. Each claim's left bound is its **own** `activity_open | ai_stop` (NOT the previous submit — this is the bug fix).
+4. **Hole ai by afk and pause:** subtract afk spans and pause spans from each ai claim (an `ai_submit` inside an `offline` afk span breaks the afk at that instant — the submit is evidence you were active).
+5. **Apply the holing rule between explicit (H) and ai (L), per overlapping pair:** if the ai claim ⊆ that explicit → keep ai (concurrent); else subtract the explicit overlap from ai. (Explicit is never holed by ai.)
+6. Emit explicit windows and surviving ai claims as segments.
 
 ## Worked examples
 
+**Nesting fixes the `[t1,t2]` loss** (A stop t1, B stop t2, B submit t3, B stop t4, A submit t5):
+- A's window = `[t1, t5]` (A's own stop → A's submit). B's window = `[t2, t3]`.
+- Overlap `[t2,t3]`; B submitted earlier (`t3 < t5`) → B wins it. A trimmed to `[t1,t2] ∪ [t3,t5]`.
+- Result: **A = [t1,t2] ∪ [t3,t5], B = [t2,t3].** `[t1,t2]` (A's reading window before B stopped) is recovered — the flat `start = max(prev_submit, lastStop)` model lost it by using the global previous-submit as the left bound. A resumes at `t3` (B's submit), not `t4` — you can work on A the moment you submit B.
+
 **Single session, with research & lunch:**
 ```
-10:00 cc_stop        AI done; you start reading
-10:05 (browser tab)  researching the problem — non-AFK, counts
-10:15 afk_on         you stepped away for lunch (idle > 60s)
-10:40 afk_off        back
-10:42 cc_submit      ── attributed to this session: [10:00–10:15] ∪ [10:40–10:42]
+10:00 ai_stop         agent done; you start reading
+10:05 (browser tab)   researching — non-AFK, counts
+10:15 afk_on          lunch (idle > 60s)
+10:40 afk_off         back
+10:42 ai_submit       ── A = [10:00–10:15] ∪ [10:40–10:42]   (afk holes the window)
 ```
 
-**Two interleaved sessions (S, R) in Ghostty splits:**
+**Holing rule — straddle vs embedded** (meeting `[2:00, 3:00]`):
 ```
-10:00 cc_stop(S)
-10:02 cc_stop(R)        both AIs done; you're working on one of them
-10:05 cc_submit(S)      → [max(-inf, 10:00)=10:00 .. 10:05] → S
-10:06 cc_submit(R)      → [max(10:05, 10:02)=10:05 .. 10:06] → R
-```
-No overlap; the `[10:00–10:05]` block you spent (in any window) went to S because that's what you committed to first.
+ai [1:50, 2:10]  →  ai ⊄ meeting (1:50 < 2:00)  → hole holds
+                   ai = [1:50, 2:00],  meeting = [2:00, 3:00]   (overlap absorbed by meeting)
 
-**AI execution correctly excluded:**
+ai [2:10, 2:15]  →  ai ⊆ meeting                  → hole does NOT hold → concurrent
+                   ai = [2:10, 2:15],  meeting = [2:00, 3:00]   (both recorded)
 ```
-10:00 cc_submit(S)     you send a prompt
-10:00–10:20            S's AI runs tools (you do nothing)
-10:20 cc_stop(S)
-10:25 cc_submit(S)     → start = max(10:00, 10:20) = 10:20 → [10:20–10:25] → S
-                        the [10:00–10:20] AI grind is NOT attributed.
-```
+Intuition: ai straddling the meeting boundary → the meeting interrupts ai (the during-meeting part is absorbed). ai entirely within the meeting → genuine concurrent sub-effort (you did ai work during the meeting) → both count.
+
+**Explicit immune to afk:** a meeting `[14:00, 15:00]` counts the full hour even if you were idle `14:30–14:40` (a video call where you're listening, not typing). Only a manual `pause` would hole it.
 
 ## Known limits (honest)
 
-- **Intra-gap interleaving:** if within one submit-gap you genuinely work on two sessions but submit to only one, that whole gap is attributed to the submitted one. Unavoidable without focus signals; `force_owner` is the escape hatch.
-- **Tail loss:** activity time after the last event up to AFK/session-close may be under-counted. Bounded and small.
-- **Ambiguous micro-windows** between a `cc_stop` and the winning submit's `start` can go unattributed. Minor; manual override covers it.
+- **Intra-gap interleaving:** if within one ai window you genuinely work on two sessions but submit to only one, that whole window goes to the submitted one. `force_owner` is the escape hatch.
+- **Tail loss (accepted):** an `ai_stop` with no following `ai_submit` is not counted (task likely done). Reading the final output then closing without submitting loses that window — recoverable via `force_owner` or a manual activity.
+- **Ambiguous micro-windows** between an `ai_stop` and the winning submit's start can go unattributed. Minor; manual override covers it.
+- **Concurrent segments can overlap** (the embedded case), so `sum(seconds)` may exceed wall-clock. The consumer applies its billing policy (e.g. prefer explicit).
 
-Acceptable for a timesheet: minute-level granularity, human-reviewable, manually correctable. And because attribution is recomputed on every read, improving the heuristic improves *all* past ranges at once — while already-submitted timesheets stay pinned by their snapshot recipe.
+Attribution is recomputed on every read, so improving the heuristic improves *all* past ranges at once — while already-submitted timesheets stay pinned by their snapshot recipe.
