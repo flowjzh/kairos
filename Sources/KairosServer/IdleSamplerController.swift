@@ -65,7 +65,7 @@ public final class IdleSamplerController: @unchecked Sendable {
     private func poll() {
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
         let now = Date().timeIntervalSince1970
-        let (next, events) = IdleSampler.sample(state: state, idleSeconds: idle, now: now, threshold: threshold)
+        let (next, events) = IdleSampler.sample(state: state, idleSeconds: idle, now: now, threshold: threshold, pollInterval: pollInterval)
         state = next
         for event in events { Task { await self.append(event) } }
     }

@@ -34,11 +34,12 @@ Skipped in M1 as premature at <~500 events/day; M2's AI-event volume and the ai 
 
 - **Exit criteria:** a day of real Claude work yields per-project/-client human-time matching intuition, with AI-execution excluded and multi-session gaps attributed correctly; the menu/owner state stays consistent across pause/afk/resume (no drift), and a busy day's `segments.get` stays sub-second.
 
-## M3 — Snapshots + reference summarizer
+## M3 — Python SDK + reference consumer
 
-- `snapshots.create` / `kairos snapshot create`: recipe (params + per-source watermarks + digest); drains spool first; reproduce path.
-- Reference summarizer consumer (Python SDK): `core.segments` → transcript slicing → pluggable LLM → Markdown, grouped by client/project.
-- **Exit criteria:** end-of-day timesheet is submittable; re-deriving a snapshot reproduces it (segments + mapping).
+- **`sdk/python` (`kairos-sdk`):** a thin, dependency-free consumer wrapper over the line-JSON socket. Exposes `segments(from, to, project?, client?)` → typed `Segment`s joined to their `Activity` (client/billable resolved, `metadata.transcript_path`), one socket round-trip per call. Installable (`-e`).
+- **Reference consumer (`effort-report-ex`, external):** a timesheet report driven entirely by Kairos segments — effort = Σ `segment.seconds` (submit-anchored + afk/pause-holed; the predecessor's per-gap cap is gone). Covers all activities (claude-code / meeting / manual), grouped by (day × project; project-less → `General`), split into `--effort-slot` records. AI content is summarized from the transcript slice `[start, end]` via the local `claude -p` CLI (concurrent, asyncio); meeting/manual show their title verbatim. Lives outside the daemon repo (a consumer, ADR 11).
+- **Idle/sleep hardening:** the idle sampler now tracks the afk *source* (idle vs sleep), so a `willSleep` span is no longer cancelled by the next idle poll (which sees near-zero idle right after lid close). A suspend/resume gap — a system sleep that delivered no `willSleep` — is backfilled as afk by the poll loop, so sleep time is holed whether or not the notification arrives.
+- **Exit criteria:** a consumer reads per-project/-client human-time over the socket and renders a submittable timesheet; lid-close and idle-sleep are captured as afk and excluded from work.
 
 ## M4 — Polish & open source
 
@@ -47,6 +48,14 @@ Skipped in M1 as premature at <~500 events/day; M2's AI-event volume and the ai 
 - Privacy + threat-model write-up.
 - Decide license (lean MIT or Apache-2.0).
 - README, contribution guide, ADRs (below).
+
+## M5 — Snapshots + reproducibility
+
+Deferred from M3: segments compute on demand and are already reproducible from the append-only log; a snapshot freezes a *submission* (recipe + digest) so it can be re-derived for audit.
+
+- `snapshots.create` / `kairos snapshot create`: recipe (params + per-source watermarks + `segments_digest`); drains the spool first; watermark-bounded reproduce path.
+- `snapshots.get`: re-derive segments from the frozen recipe; the digest verifies no code drift for that `attribution_version`.
+- **Exit criteria:** an end-of-day timesheet is submittable; re-deriving a snapshot reproduces it byte-for-byte (segments + mapping).
 
 ## Open decisions
 

@@ -21,6 +21,13 @@ plugins/claude-code/bin/
 *.db-wal
 *.db-shm
 
+# Python (sdk/python)
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+uv.lock
+
 # Editor
 .vscode/
 .idea/
