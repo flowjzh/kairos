@@ -6,16 +6,20 @@ This is the extension model: **new sources = new external clients speaking the p
 
 ## `kairos-claude-code` — Claude Code plugin
 
-Registered as a Claude Code plugin (same hook mechanism as the existing wakatime plugin). Its `scripts/run` reads the hook JSON from stdin and shells out to `kairos` (or sends a line-JSON RPC to the socket). Fire-and-forget with a short timeout — Claude hooks must never block; the CLI's spool fallback covers a down daemon.
+Registered as a Claude Code plugin (`plugins/claude-code/`): a `.claude-plugin/plugin.json` plus a `hooks/hooks.json` that wires the four lifecycle hooks to one small **native binary** (`kairos-claude-code`). The binary reads the hook JSON from stdin, maps it to a generic RPC, and writes the socket directly (reusing the shared `KairosClient` transport + spool) — no `jq`/`python` spawn, no shelling to the `kairos` CLI. It always exits 0. Fire-and-forget: Claude hooks must never block, and the spool fallback covers a down daemon.
+
+Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd basename`, …) in the plugin's own binary is deliberate: the `kairos` CLI stays **agent-agnostic** (ADR 12/20). A different agent ships its own binary with its own mapping.
+
+**Install** is separate from the daemon's `Kairos.app` (the plugin is just a socket client). `make plugin` builds and stages `bin/kairos-claude-code`; then either `claude --plugin-dir plugins/claude-code` (dev, per session) or, for a persistent install, register the repo's bundled local marketplace (`.claude-plugin/marketplace.json`) with `claude plugin marketplace add <repo>` and `claude plugin install kairos-claude-code@kairos`. The formal install copies the plugin (binary included) into Claude Code's own cache, where `${CLAUDE_PLUGIN_ROOT}` resolves.
 
 ### Hooks used
 
 | Claude hook | What the client does |
 |---|---|
-| `SessionStart` (or first hook) | `kairos activity open --source claude-code --id <session_id> --project <cwd-basename> --meta transcript_path=… --meta cwd=…` (idempotent) |
-| `UserPromptSubmit` | ensure activity open, then `kairos event --source claude-code --id <session_id> --kind ai_submit` |
-| `Stop` | `kairos event --source claude-code --id <session_id> --kind ai_stop` |
-| `SessionEnd` | `kairos activity close --source claude-code --id <session_id>` |
+| `SessionStart` | `activities.open` `{source: claude-code, external_id: session_id, project: cwd-basename, metadata: {transcript_path, cwd}}` (idempotent) |
+| `UserPromptSubmit` | `events.post` `{activity, kind: ai_submit}` |
+| `Stop` | `events.post` `{activity, kind: ai_stop}` |
+| `SessionEnd` | `activities.close` `{source, external_id: session_id}` |
 
 The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly what the daemon needs (no window/title introspection, hence no Accessibility). The claude-code client reports **only `project`** (the cwd basename); it never needs to know the billing client — that is resolved later via the project→client mapping.
 
@@ -23,7 +27,7 @@ The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly
 
 - **Does:** map hook payload → protocol call; fire-and-forget.
 - **Does not:** compute time, attribute, resolve clients, or touch SQLite.
-- **Resilience:** the `kairos` CLI spools to `~/.kairos/spool/` if the daemon is down.
+- **Resilience:** the binary spools to `~/.kairos/spool/` if the daemon is down.
 
 ## Non-coding work: the config window (built-in)
 

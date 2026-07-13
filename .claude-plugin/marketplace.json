@@ -1,0 +1,12 @@
+{
+  "name": "kairos",
+  "owner": { "name": "Kairos" },
+  "description": "Local marketplace for the Kairos Claude Code plugin",
+  "plugins": [
+    {
+      "name": "kairos-claude-code",
+      "source": "./plugins/claude-code",
+      "description": "Kairos human-time tracking for Claude Code sessions"
+    }
+  ]
+}

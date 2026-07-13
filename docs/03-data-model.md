@@ -95,7 +95,7 @@ CREATE TRIGGER map_immutable_d BEFORE DELETE ON project_client_map BEGIN SELECT 
 
 | kind | activity_id | payload | meaning |
 |---|---|---|---|
-| `activity_open` | set | `{title?, project?, metadata?}` | activity starts (open bound) |
+| `activity_open` | set | — | activity starts (open bound); title/project/metadata live on the immutable `activities` row |
 | `activity_close` | set | — | activity ends (close bound) |
 | `activity_override` | set | `{client_id?, billable?}` | set/replace the activity's direct client (latest by id wins; `client_id:null` = clear) |
 | `ai_stop` | set | — | an AI agent finished its turn |

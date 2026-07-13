@@ -64,14 +64,13 @@ A small SwiftUI window (opened from the menu bar; not a separate app), the built
 
 This is the only UI in scope. Record-list / dashboard viewers are explicitly out of scope for now; the reserved read methods (`events.list` / `activities.list` / `snapshots.list`) leave room for one later, built as an ordinary consumer against the same protocol — SwiftUI or web, decoupled by the socket.
 
-### 6. Owner state machine (advisory display)
+### 6. Owner prediction (advisory display)
+
+The predicted owner is the most recently claimed activity — the latest `activity_open` / `ai_stop` / `force_owner` whose activity has no later `activity_close`. `afk` and `pause` do **not** clear it: they are temporary states surfaced separately (the menu shows "Idle" / "Paused"), and `owner.get` still returns the active activity. An `ai_stop` claims the gap (the agent finished; you are now working on that session); `ai_submit` does not change the owner (you handed work back to the agent, but the session is still yours). All three menu derivations — afk/pause spans, the owner, and the open-activity set — come from one `GlobalState` reducer (ADR 21), so they cannot drift.
 
 ```
-            ai_stop(X)              ai_submit(any) / pause
-   (none) ─────────────▶ owner=X (predicted) ─────────────▶ (none / waiting)
-     ▲                       │  force_owner(Y)                 │
-     │                       ▼                                 │
-     └──────── afk_on ◀── owner=Y (manual) ◀──────────────────┘
+   activity_open(X) / ai_stop(X) / force_owner(X)   activity_close(X)
+   ──────────────────────────────────────▶ owner=X ─────────────────▶ (none)
 ```
 
 Drives the menu-bar label only; authoritative attribution is always the read-time computation.

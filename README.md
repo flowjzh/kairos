@@ -6,7 +6,50 @@ Kairos is a local-first, macOS **human-time kernel**. It records the time you ar
 
 ## Status
 
-**Design / spec stage.** No implementation yet. The documents under [`docs/`](./docs) are the blueprint for implementation and the basis of an open-source release.
+**M1 + M2 implemented** (macOS 14+): the resident menu-bar daemon, the line-JSON protocol, explicit-bounds **and** AI submit-anchored attribution, the `kairos` CLI, a SwiftUI config window, and the `kairos-claude-code` Claude Code plugin. Snapshots and the reference Python summarizer are M3. See [roadmap](./docs/09-roadmap.md).
+
+## Quickstart
+
+```sh
+make test                 # Swift Testing suite (no Xcode required)
+make app                  # build + assemble Kairos.app (ad-hoc signed)
+swift run KairosDaemon    # run the daemon directly — a menu-bar item appears
+make install              # install as a LaunchAgent (RunAtLoad + KeepAlive)
+```
+
+The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup.
+
+```sh
+kairos client add "Acme"                            # prints the new client id
+kairos map set --project daemonclaw --client 1      # tag a project's client (retroactive)
+kairos activity open --source manual --id api-review --project daemonclaw --title "API review"
+kairos activity close --source manual --id api-review
+kairos export --from 0 --to 9999999999 | jq .       # client-grouped, attributed segments
+```
+
+Meetings and ad-hoc tasks can also be logged from the menu bar → **Configure…** (start/stop, direct client). Attribution is recomputed on every read: a manual `pause` holes explicit time, while `afk` does not (explicit is afk-immune). AI sessions use submit-anchored windows (`[open | ai_stop, ai_submit]`), which afk *does* hole.
+
+## Claude Code plugin
+
+Track AI coding sessions by installing the bundled plugin. It hooks `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` and shells out to a small native binary that reports to the daemon (fire-and-forget, spooled if the daemon is down).
+
+```sh
+make plugin                                   # build + stage bin/kairos-claude-code
+```
+
+**Dev (per session):** `claude --plugin-dir plugins/claude-code`
+
+**Formal (persists across sessions)** via the bundled local marketplace:
+
+```sh
+claude plugin marketplace add "$(pwd)"        # register this repo as a marketplace
+claude plugin install kairos-claude-code@kairos
+```
+
+The formal install copies the plugin (binary included) into Claude's own cache — separate from `Kairos.app`, which holds the daemon. After rebuilding the binary, re-run `make plugin` then `claude plugin install …` again (or `/reload-plugins`) to refresh the cached copy.
+
+Each session auto-appears as a project (its cwd basename); tag that project's client once in **Configure…** and it applies retroactively. Human-work time (reading, thinking, prompting between the agent stopping and your next submit) is attributed to the session; AI-execution time is excluded.
+
 
 ## Architecture in one breath
 

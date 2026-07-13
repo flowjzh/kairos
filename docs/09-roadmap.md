@@ -18,11 +18,21 @@ The daemon is usable for non-AI timesheets before any Claude integration exists.
 
 ## M2 — Claude Code client + submit attribution
 
-- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) shelling out to `kairos`.
-- **AI submit-anchored** strategy added to the registry: closed `[activity_open | ai_stop, ai_submit]` windows, resolved by submit-priority (nesting); open tails not counted; AI-execution excluded.
+*Implemented* (attribution + reducer + plugin + read-path hardening); multi-session verification against real Claude work is the remaining exit check.
+
+- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) — a small native binary (`KairosClaudeCode` mapping + shared `KairosClient` transport) that maps hook JSON to generic RPCs and speaks the socket directly (spool fallback), keeping the `kairos` CLI agent-agnostic.
+- **AI submit-anchored** strategy in the registry: closed `[activity_open | ai_stop, ai_submit]` windows, resolved by submit-priority (nesting); open tails not counted; AI-execution excluded; afk/pause hole the windows (with the afk-submit-break); explicit-vs-ai holing.
 - AI-agent projects auto-appear; tag each to a client once in the config window.
 - Multi-session verification (several Ghostty splits); `force_owner` exercised.
-- **Exit criteria:** a day of real Claude work yields per-project/-client human-time matching intuition, with AI-execution time excluded and multi-session gaps attributed correctly.
+
+### Scale + hardening (deferred from M1)
+
+Skipped in M1 as premature at <~500 events/day; M2's AI-event volume and the ai owner transitions were the trigger. *Implemented in M2.*
+
+- **Unified afk/pause/owner state** behind one `KairosCore` reducer — `GlobalState` consumes the event log once and exposes afk/pause spans + the current owner + open activities; `GlobalSpans`, `OwnerPredictor`, and the menu `DaemonModel` all read from it. Pre-empts the drift that caused the owner-after-pause bug; the `ai_stop` owner transition lands here. (ADR 21.)
+- **Scaled reads for AI volume:** batched activity/client resolution in `attributedSegments` (was N+1), range-bounded event loading on the read path (drops history for activities closed before the range; also serves M3 snapshot reproduction), and an event-driven menu refresh (a change signal from the store) replacing the full-table poll. The daemon also periodically checkpoints the WAL and checkpoints on graceful shutdown, so writes survive restarts (a `RETURNING`-statement caching attempt was reverted — it parked write transactions uncommitted; re-parsing is negligible at this volume).
+
+- **Exit criteria:** a day of real Claude work yields per-project/-client human-time matching intuition, with AI-execution excluded and multi-session gaps attributed correctly; the menu/owner state stays consistent across pause/afk/resume (no drift), and a busy day's `segments.get` stays sub-second.
 
 ## M3 — Snapshots + reference summarizer
 
@@ -72,3 +82,4 @@ The daemon is usable for non-AI timesheets before any Claude integration exists.
 18. **afk carries a `reason`** (`idle`/`sleep`/`offline`) — the idle sampler uses `NSWorkspace` sleep/wake notifications and daemon-restart-gap detection so afk spans cover lid-close/shutdown/reboot, enabling `afk > ai` holing across those gaps. A spooled `ai_submit` inside an `offline` gap breaks the afk at that instant.
 19. **`sources`, `projects`, `clients` are mutable identity tables** `(id PK, slug UNIQUE, display_name)` (clients: `id, name`), referenced by integer FK everywhere, never hard-deleted, **not watermarked** — identity is pinned by the stable id referenced from the append-only tables; display resolves live. The daemon auto-registers sources/projects by slug on first sight, so adding a new AI agent is pure data.
 20. **Event kinds are agent-agnostic (`ai_stop`/`ai_submit`); strategy is inferred from the event signature, not the source.** An activity with `ai_submit` events → ai submit-anchored; else explicit-bounds. The registry is keyed by strategy-name + `attribution_version`, so a new agent (which emits `ai_*` events) needs no code change — only a genuinely new strategy kind does.
+21. **Unified afk/pause/owner state behind one `KairosCore` reducer (M2).** Three derivations answer "am I afk/paused? who owns the current gap?" — previously independent (`GlobalSpans` paired on/off, `OwnerPredictor` released only on `activity_close`, the menu `DaemonModel` was last-write-wins) and they could drift (the owner-after-pause bug was a symptom). A single `GlobalState` reducer now consumes the event log once and exposes afk/pause spans, the current owner, and open activities; `GlobalSpans`, `OwnerPredictor`, and the menu all read from it. Landed in M2 because the `ai_stop` owner transition touches the same model. Deferred from M1, where the on/off stream is canonical and the three agreed.

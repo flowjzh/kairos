@@ -31,11 +31,11 @@ activities.open    { source, external_id?, project?, title?, metadata? }
                    → { activity_id }                  # idempotent on (source, external_id)
 activities.close   { source, external_id?, ts }
                    → {}
-events.post        { activity: {source, external_id} | null, kind, ts, payload? }
+events.post        { activity: {source, external_id}, kind, ts, payload? }
                    → {}                               # appended; fire-and-forget
 ```
 
-`source` and `project` are slugs — the daemon auto-registers them (upsert into `sources`/`projects`) on first sight, so a new agent/project needs no prior setup. `activities.open` creates the identity row (see [03](./03-data-model.md)) and emits `activity_open`; `activities.close` emits `activity_close`. A meeting/manual with a direct client follows `activities.open` with `events.post` `kind=activity_override`.
+`source` and `project` are slugs — the daemon auto-registers them (upsert into `sources`/`projects`) on first sight, so a new agent/project needs no prior setup. `activities.open` creates the identity row (see [03](./03-data-model.md)) and emits `activity_open`; `activities.close` emits `activity_close`. A meeting/manual with a direct client follows `activities.open` with `events.post` `kind=activity_override`. `events.post` is activity-scoped (it requires an activity); global events are written by the daemon itself — afk by the idle sampler directly to the store, and pause via `control.pause`.
 
 ### Control (config UI / menu bar / CLI)
 

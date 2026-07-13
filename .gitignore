@@ -12,6 +12,9 @@ build/
 # Package artifacts
 Package.resolved
 
+# Built plugin binary (produced by `make plugin`)
+plugins/claude-code/bin/
+
 # Local runtime data (never commit)
 ~/.kairos/
 *.db
