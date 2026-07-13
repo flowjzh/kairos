@@ -41,7 +41,35 @@ Skipped in M1 as premature at <~500 events/day; M2's AI-event volume and the ai 
 - **Idle/sleep hardening:** the idle sampler now tracks the afk *source* (idle vs sleep), so a `willSleep` span is no longer cancelled by the next idle poll (which sees near-zero idle right after lid close). A suspend/resume gap — a system sleep that delivered no `willSleep` — is backfilled as afk by the poll loop, so sleep time is holed whether or not the notification arrives.
 - **Exit criteria:** a consumer reads per-project/-client human-time over the socket and renders a submittable timesheet; lid-close and idle-sleep are captured as afk and excluded from work.
 
-## M4 — Polish & open source
+## M4 — AI session focus tracking (PTY wrapper)
+
+Multi-session over-count (docs/01): the submit-anchored "thinking" window
+`[ai_stop, ai_submit]` is counted for every open Claude split, even the ones you
+aren't looking at. This milestone adds a **focus** signal to hole those windows,
+obtained **permissionlessly** (no Accessibility) via in-band terminal focus reports.
+
+- **`kairos-pty` (Rust) — a transparent PTY wrapper.** Launch Claude as
+  `kairos-pty claude`; it runs Claude on a pty, injects `KAIROS_SESSION_ID`, and
+  copies bytes both ways unchanged. Claude enables DECSET **1004** focus reporting
+  itself, so the terminal emits `ESC[I`/`ESC[O` on focus/blur; the wrapper taps
+  those (observe-only) and reports each to the daemon via `focus.report`
+  (best-effort — dropped if the socket is down).
+- **Self-healing session map.** Every Claude hook RPC also carries
+  `KAIROS_SESSION_ID`, so the daemon holds an in-memory
+  `KAIROS_SESSION_ID → (source, external_id)` map. A focus report resolves through
+  it to the activity, and the daemon appends `ai_focus`/`ai_blur` to the
+  append-only log (reproducible, like afk). The map is ephemeral — a daemon
+  restart is repaired by the next hook.
+- **Attribution is unchanged in this milestone**: the focus events land in the
+  log, inert (the reducer/strategies ignore them), ready to hole the ai windows.
+  *How* focus holes the windows — and a possible Rust port of the daemon — are
+  follow-up design steps, not part of this milestone.
+- **Exit criteria:** several `kairos-pty claude` splits; switching focus lands
+  `ai_focus`/`ai_blur` on the correct session in the log, the TUI is visually
+  unaffected, and focus during a daemon outage is dropped and recovered on the
+  next hook.
+
+## M5 — Polish & open source
 
 - Packaging: signed/notarized `.app` + installer; optional Homebrew tap.
 - Docs site, animated demo, sample timesheet, example third-party consumer.
@@ -49,7 +77,7 @@ Skipped in M1 as premature at <~500 events/day; M2's AI-event volume and the ai 
 - Decide license (lean MIT or Apache-2.0).
 - README, contribution guide, ADRs (below).
 
-## M5 — Snapshots + reproducibility
+## M6 — Snapshots + reproducibility
 
 Deferred from M3: segments compute on demand and are already reproducible from the append-only log; a snapshot freezes a *submission* (recipe + digest) so it can be re-derived for audit.
 
@@ -79,7 +107,7 @@ Deferred from M3: segments compute on demand and are already reproducible from t
 6. **Snapshot = recipe (params + per-source watermarks + digest), not stored segments** — smaller, cannot drift, immutable, auditable. `snapshot create` drains the spool first; late-arriving-in-range events are excluded by design ("frozen at submission").
 7. **`project → client` billing is a resolved-at-read mapping, not a field on activities** — ai sessions report only `project` (auto), the client is tagged once and applies retroactively; meetings/manual set a direct client via an `activity_override` event (watermarked, not a mutable column).
 8. **`clients` is a mutable identity table (id stable, name editable), not watermarked** — names are cosmetic labels; identity is pinned via the map/override watermarks.
-9. **Intent-based attribution** (submit / explicit start) over window-focus tracking — eliminates the Accessibility dependency.
+9. **Ownership is intent-based** (submit / explicit start), never window-focus — this is what stays true regardless of which window is focused, and it eliminates the Accessibility dependency. Focus is not discarded, though: **M4** reintroduces it as a *holing* signal (blur removes over-counted "thinking" time across parallel sessions), obtained **permissionlessly in-band** via the terminal's DECSET-1004 focus reports through the `kairos-pty` wrapper — so ownership and focus are separate concerns and neither needs Accessibility. (Refined in M4; this ADR originally rejected focus outright.)
 10. **Zero special permissions** as a hard constraint.
 11. **Output lives in external consumers** — the core exposes a segments API and does not format or deliver timesheets.
 12. **Extension by protocol, not in-process plugins** — new sources and outputs are external processes speaking the socket/CLI.
@@ -92,3 +120,5 @@ Deferred from M3: segments compute on demand and are already reproducible from t
 19. **`sources`, `projects`, `clients` are mutable identity tables** `(id PK, slug UNIQUE, display_name)` (clients: `id, name`), referenced by integer FK everywhere, never hard-deleted, **not watermarked** — identity is pinned by the stable id referenced from the append-only tables; display resolves live. The daemon auto-registers sources/projects by slug on first sight, so adding a new AI agent is pure data.
 20. **Event kinds are agent-agnostic (`ai_stop`/`ai_submit`); strategy is inferred from the event signature, not the source.** An activity with `ai_submit` events → ai submit-anchored; else explicit-bounds. The registry is keyed by strategy-name + `attribution_version`, so a new agent (which emits `ai_*` events) needs no code change — only a genuinely new strategy kind does.
 21. **Unified afk/pause/owner state behind one `KairosCore` reducer (M2).** Three derivations answer "am I afk/paused? who owns the current gap?" — previously independent (`GlobalSpans` paired on/off, `OwnerPredictor` released only on `activity_close`, the menu `DaemonModel` was last-write-wins) and they could drift (the owner-after-pause bug was a symptom). A single `GlobalState` reducer now consumes the event log once and exposes afk/pause spans, the current owner, and open activities; `GlobalSpans`, `OwnerPredictor`, and the menu all read from it. Landed in M2 because the `ai_stop` owner transition touches the same model. Deferred from M1, where the on/off stream is canonical and the three agreed.
+22. **`kairos-pty` is a transparent PTY wrapper, not an in-daemon focus watcher (M4).** Terminal focus (DECSET 1004) is reported in-band on the pty byte stream, so a thin external wrapper taps it (`ESC[I`/`ESC[O`, observe-only, forwarding every byte unchanged) with zero special permissions — the daemon never introspects windows or terminals. The wrapper injects `KAIROS_SESSION_ID`; the Claude hook joins it to the session's `external_id`. Extension-by-protocol (ADR 12): a new source of focus is an external process speaking the socket, not daemon code.
+23. **The `KAIROS_SESSION_ID → external_id` map is ephemeral in-memory soft state, self-healed by every hook (M4).** A `KAIROS_SESSION_ID` is meaningful only while its wrapper lives, so the map is never persisted or searched over history; each hook RPC re-registers it (last-write-wins), so a daemon restart is repaired by the next hook — worst case, focus is lost only in that gap. A focus report that arrives before the first hook is buffered (latest wins) and flushed on registration. `ai_focus`/`ai_blur` are appended to the log (like afk) so focus-holed segments stay reproducible; a report that can't be resolved is dropped (best-effort — focus is live telemetry, and a stale replay is worse than a gap).

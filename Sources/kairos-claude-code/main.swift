@@ -14,7 +14,8 @@ let socketPath = "\(home)/.kairos/daemon.sock"
 let spoolDir = "\(home)/.kairos/spool"
 
 let data = FileHandle.standardInput.readDataToEndOfFile()
-guard let request = ClaudeCodeHook.request(fromJSON: data, now: Date().timeIntervalSince1970) else {
+let kairosSessionId = ProcessInfo.processInfo.environment["KAIROS_SESSION_ID"]
+guard let request = ClaudeCodeHook.request(fromJSON: data, kairosSessionId: kairosSessionId, now: Date().timeIntervalSince1970) else {
     exit(0)   // malformed or untracked event — ignore silently
 }
 

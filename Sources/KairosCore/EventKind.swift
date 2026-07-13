@@ -6,6 +6,8 @@ public enum EventKind: String, Codable, Sendable {
     case activityOverride = "activity_override"
     case aiStop = "ai_stop"
     case aiSubmit = "ai_submit"
+    case aiFocus = "ai_focus"
+    case aiBlur = "ai_blur"
     case afkOn = "afk_on"
     case afkOff = "afk_off"
     case pauseOn = "pause_on"

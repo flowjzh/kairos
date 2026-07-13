@@ -12,12 +12,19 @@ public enum DaemonSources {
 }
 
 /// Maps a line-JSON `RequestEnvelope` to `Store` operations and back to a
-/// `ResponseEnvelope`. Stateless; the daemon (and tests) drive it with a
-/// `Store`. `events.post` requires an activity `{source, external_id}` —
-/// global events (afk) are written by the daemon internally, and pause uses
-/// `control.pause`.
+/// `ResponseEnvelope`. Per-request state comes from the injected `Store`; the
+/// only daemon-scoped state it carries is the `SessionRegistry` (the ephemeral
+/// `kairos-pty` focus map, M4). `events.post` requires an activity
+/// `{source, external_id}` — global events (afk) are written by the daemon
+/// internally, and pause uses `control.pause`.
 public struct Dispatcher: Sendable {
-    public init() {}
+    /// Ephemeral `KAIROS_SESSION_ID → activity` map for M4 focus reports; shared
+    /// across every request through the single daemon-held `Dispatcher`.
+    let sessions: SessionRegistry
+
+    public init(sessions: SessionRegistry = SessionRegistry()) {
+        self.sessions = sessions
+    }
 
     public func handle(
         _ request: RequestEnvelope,
@@ -38,6 +45,7 @@ public struct Dispatcher: Sendable {
     private func dispatch(_ request: RequestEnvelope, store: Store, now: @Sendable () -> Double) async throws -> JSONValue {
         switch request.method {
         case .eventsPost: return try await eventsPost(request, store: store, now: now)
+        case .focusReport: return try await focusReport(request, store: store, now: now)
         case .activitiesOpen: return try await activitiesOpen(request, store: store, now: now)
         case .activitiesClose: return try await activitiesClose(request, store: store, now: now)
         case .controlPause: return try await controlPause(request, store: store, now: now)
@@ -69,6 +77,7 @@ public struct Dispatcher: Sendable {
         let sourceId = try await store.resolveSource(slug: activity.source)
         let payload = p.payload.flatMap { try? Wire.data($0) }
         _ = try await store.appendEvent(activityId: activityId, sourceId: sourceId, kind: kind, ts: p.ts, payload: payload)
+        await registerSession(p.kairosSessionId, source: activity.source, externalId: externalId, store: store)
         return try Wire.encodeValue(EmptyResult())
     }
 
@@ -76,6 +85,7 @@ public struct Dispatcher: Sendable {
         let p = try Wire.decodeValue(request.params, as: ActivitiesOpenParams.self)
         let metadata = p.metadata.flatMap { try? Wire.data($0) }
         let id = try await store.openActivity(source: p.source, externalId: p.externalId, project: p.project, title: p.title, metadata: metadata, ts: now())
+        await registerSession(p.kairosSessionId, source: p.source, externalId: p.externalId, store: store)
         return try Wire.encodeValue(ActivitiesOpenResult(activityId: id))
     }
 
@@ -84,7 +94,39 @@ public struct Dispatcher: Sendable {
         try rejectFuture(p.ts, now: now)
         let id = try await requireActivity(source: p.source, externalId: p.externalId, store: store)
         try await store.closeActivity(activityId: id, ts: p.ts)
+        await registerSession(p.kairosSessionId, source: p.source, externalId: p.externalId, store: store)
         return try Wire.encodeValue(EmptyResult())
+    }
+
+    // MARK: Focus (M4)
+
+    /// A focus transition from `kairos-pty`. Resolve the wrapper session to its
+    /// activity and append `ai_focus`/`ai_blur`; if the mapping isn't known yet
+    /// (the report beat the first hook), buffer it for flush on registration.
+    private func focusReport(_ request: RequestEnvelope, store: Store, now: @Sendable () -> Double) async throws -> JSONValue {
+        let p = try Wire.decodeValue(request.params, as: FocusReportParams.self)
+        try rejectFuture(p.ts, now: now)
+        if let target = await sessions.resolve(p.kairosSessionId) {
+            try await appendFocus(target, focused: p.focused, ts: p.ts, store: store)
+        } else {
+            await sessions.buffer(p.kairosSessionId, focused: p.focused, ts: p.ts)
+        }
+        return try Wire.encodeValue(EmptyResult())
+    }
+
+    /// Refresh the `kairos-pty` mapping from a hook RPC, flushing any focus that
+    /// arrived before the mapping was known. No-op when unwrapped or `externalId`
+    /// is absent.
+    private func registerSession(_ kairosSessionId: String?, source: String, externalId: String?, store: Store) async {
+        guard let kairosSessionId, let externalId else { return }
+        guard let pending = await sessions.register(kairosSessionId, source: source, externalId: externalId) else { return }
+        try? await appendFocus(SessionRegistry.Target(source: source, externalId: externalId), focused: pending.focused, ts: pending.ts, store: store)
+    }
+
+    private func appendFocus(_ target: SessionRegistry.Target, focused: Bool, ts: Double, store: Store) async throws {
+        guard let activityId = try await store.findActivity(source: target.source, externalId: target.externalId) else { return }
+        let sourceId = try await store.resolveSource(slug: target.source)
+        _ = try await store.appendEvent(activityId: activityId, sourceId: sourceId, kind: focused ? .aiFocus : .aiBlur, ts: ts)
     }
 
     // MARK: Control

@@ -73,4 +73,28 @@ struct ClaudeCodeHookTests {
         #expect(p.project == nil)
         #expect(p.metadata == nil)
     }
+
+    @Test
+    func kairosSessionIdRidesOnEveryRPC() throws {
+        let kid = "kpty-xyz"
+        let open = try #require(ClaudeCodeHook.request(from: input("SessionStart"), kairosSessionId: kid, now: 1))
+        #expect(try Wire.decodeValue(open.params, as: ActivitiesOpenParams.self).kairosSessionId == kid)
+        let submit = try #require(ClaudeCodeHook.request(from: input("UserPromptSubmit"), kairosSessionId: kid, now: 1))
+        #expect(try Wire.decodeValue(submit.params, as: EventsPostParams.self).kairosSessionId == kid)
+        let end = try #require(ClaudeCodeHook.request(from: input("SessionEnd"), kairosSessionId: kid, now: 1))
+        #expect(try Wire.decodeValue(end.params, as: ActivitiesCloseParams.self).kairosSessionId == kid)
+    }
+
+    @Test
+    func kairosSessionIdAbsentWhenUnwrapped() throws {
+        let open = try #require(ClaudeCodeHook.request(from: input("SessionStart"), now: 1))
+        #expect(try Wire.decodeValue(open.params, as: ActivitiesOpenParams.self).kairosSessionId == nil)
+    }
+
+    @Test
+    func kairosSessionIdEncodesSnakeCase() throws {
+        let submit = try #require(ClaudeCodeHook.request(from: input("UserPromptSubmit"), kairosSessionId: "k1", now: 1))
+        let json = try #require(String(data: Wire.data(submit.params), encoding: .utf8))
+        #expect(json.contains("kairos_session_id"))
+    }
 }

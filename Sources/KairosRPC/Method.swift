@@ -4,6 +4,7 @@ public enum Method: String, Codable, Sendable {
     case activitiesOpen = "activities.open"
     case activitiesClose = "activities.close"
     case eventsPost = "events.post"
+    case focusReport = "focus.report"
     case controlPause = "control.pause"
     case controlOwner = "control.owner"
     case clientsList = "clients.list"

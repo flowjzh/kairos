@@ -100,12 +100,13 @@ CREATE TRIGGER map_immutable_d BEFORE DELETE ON project_client_map BEGIN SELECT 
 | `activity_override` | set | `{client_id?, billable?}` | set/replace the activity's direct client (latest by id wins; `client_id:null` = clear) |
 | `ai_stop` | set | — | an AI agent finished its turn |
 | `ai_submit` | set | — | user submitted a prompt to an AI agent |
+| `ai_focus` / `ai_blur` | set | — | the AI session's terminal gained / lost focus (M4; via `kairos-pty`) |
 | `afk_on` | NULL | `{reason}` | user went away; `reason` = `idle` \| `sleep` \| `offline` |
 | `afk_off` | NULL | `{reason?}` | user returned |
 | `pause_on` / `pause_off` | NULL | — | manual global pause |
 | `force_owner` | set | — | assert this activity owns the current gap |
 
-`ai_stop`/`ai_submit` are **agent-agnostic** — which agent (Claude Code, Cursor, …) is identified by `source_id` → `sources.slug` (e.g. `claude-code`). The attribution strategy is inferred from the event *signature* (an activity with `ai_submit` events → ai submit-anchored; else explicit-bounds), **not** keyed by source — so adding a new AI agent requires no code change (see [04](./04-attribution.md)). `afk_on` `reason`: `idle` (idle timeout, machine on), `sleep` (system sleep / lid close), `offline` (machine off / daemon-down gap).
+`ai_stop`/`ai_submit` are **agent-agnostic** — which agent (Claude Code, Cursor, …) is identified by `source_id` → `sources.slug` (e.g. `claude-code`). The attribution strategy is inferred from the event *signature* (an activity with `ai_submit` events → ai submit-anchored; else explicit-bounds), **not** keyed by source — so adding a new AI agent requires no code change (see [04](./04-attribution.md)). `afk_on` `reason`: `idle` (idle timeout, machine on), `sleep` (system sleep / lid close), `offline` (machine off / daemon-down gap). `ai_focus`/`ai_blur` are holing signals (M4); they don't affect strategy inference and are recorded for later focus-based holing of ai windows.
 
 ## Activity bounds & client override — both event-sourced
 

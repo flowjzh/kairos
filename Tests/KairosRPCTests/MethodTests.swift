@@ -8,6 +8,7 @@ struct MethodTests {
         #expect(Method.activitiesOpen.rawValue == "activities.open")
         #expect(Method.activitiesClose.rawValue == "activities.close")
         #expect(Method.eventsPost.rawValue == "events.post")
+        #expect(Method.focusReport.rawValue == "focus.report")
         #expect(Method.controlPause.rawValue == "control.pause")
         #expect(Method.controlOwner.rawValue == "control.owner")
         #expect(Method.clientsList.rawValue == "clients.list")

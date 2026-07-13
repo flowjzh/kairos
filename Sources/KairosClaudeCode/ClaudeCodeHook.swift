@@ -33,12 +33,14 @@ public enum ClaudeCodeHook {
 
     /// Decode stdin bytes then map; nil if the JSON is malformed or the event
     /// isn't one we track (the caller exits 0 regardless — never disrupt Claude).
-    public static func request(fromJSON data: Data, now: Double) -> RequestEnvelope? {
+    /// `kairosSessionId` is the wrapping `kairos-pty` session, if any (M4); it
+    /// rides on every RPC so the daemon can keep its focus map fresh.
+    public static func request(fromJSON data: Data, kairosSessionId: String? = nil, now: Double) -> RequestEnvelope? {
         guard let input = try? JSONDecoder().decode(HookInput.self, from: data) else { return nil }
-        return request(from: input, now: now)
+        return request(from: input, kairosSessionId: kairosSessionId, now: now)
     }
 
-    public static func request(from input: HookInput, now: Double) -> RequestEnvelope? {
+    public static func request(from input: HookInput, kairosSessionId: String? = nil, now: Double) -> RequestEnvelope? {
         let activity = ActivityRef(source: source, externalId: input.sessionId)
         switch input.hookEventName {
         case "SessionStart":
@@ -48,21 +50,23 @@ public enum ClaudeCodeHook {
             if let cwd = input.cwd { metadata["cwd"] = .string(cwd) }
             return try? RequestEnvelope(method: .activitiesOpen, params: Wire.encodeValue(
                 ActivitiesOpenParams(source: source, externalId: input.sessionId, project: project,
-                                     title: nil, metadata: metadata.isEmpty ? nil : metadata)))
+                                     title: nil, metadata: metadata.isEmpty ? nil : metadata,
+                                     kairosSessionId: kairosSessionId)))
         case "UserPromptSubmit":
-            return event(activity, kind: "ai_submit", now: now)
+            return event(activity, kind: "ai_submit", kairosSessionId: kairosSessionId, now: now)
         case "Stop":
-            return event(activity, kind: "ai_stop", now: now)
+            return event(activity, kind: "ai_stop", kairosSessionId: kairosSessionId, now: now)
         case "SessionEnd":
             return try? RequestEnvelope(method: .activitiesClose, params: Wire.encodeValue(
-                ActivitiesCloseParams(source: source, externalId: input.sessionId, ts: now)))
+                ActivitiesCloseParams(source: source, externalId: input.sessionId, ts: now,
+                                      kairosSessionId: kairosSessionId)))
         default:
             return nil
         }
     }
 
-    private static func event(_ activity: ActivityRef, kind: String, now: Double) -> RequestEnvelope? {
+    private static func event(_ activity: ActivityRef, kind: String, kairosSessionId: String?, now: Double) -> RequestEnvelope? {
         try? RequestEnvelope(method: .eventsPost, params: Wire.encodeValue(
-            EventsPostParams(activity: activity, kind: kind, ts: now, payload: nil)))
+            EventsPostParams(activity: activity, kind: kind, ts: now, payload: nil, kairosSessionId: kairosSessionId)))
     }
 }

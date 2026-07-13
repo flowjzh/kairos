@@ -23,6 +23,8 @@ Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd bas
 
 The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly what the daemon needs (no window/title introspection, hence no Accessibility). The claude-code client reports **only `project`** (the cwd basename); it never needs to know the billing client — that is resolved later via the project→client mapping.
 
+**Under `kairos-pty` (M4).** When Claude is launched as `kairos-pty claude`, the wrapper sets `KAIROS_SESSION_ID` in the environment; the hook binary reads it and adds `kairos_session_id` to **every** RPC above. The daemon uses it to keep an ephemeral `kairos_session_id → (source, external_id)` map fresh, so it can attribute the wrapper's `focus.report` transitions to this session as `ai_focus`/`ai_blur` (see [05](./05-protocol.md), [09](./09-roadmap.md)). Unwrapped sessions simply omit the field and behave exactly as before.
+
 ### Responsibilities & non-responsibilities
 
 - **Does:** map hook payload → protocol call; fire-and-forget.

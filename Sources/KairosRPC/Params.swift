@@ -17,13 +17,17 @@ public struct ActivitiesOpenParams: Codable, Sendable, Equatable {
     public let project: String?
     public let title: String?
     public let metadata: [String: JSONValue]?
+    /// The wrapping `kairos-pty` session, when launched under one — lets the
+    /// daemon map this activity's `external_id` to focus reports (M4).
+    public let kairosSessionId: String?
 
-    public init(source: String, externalId: String?, project: String?, title: String?, metadata: [String: JSONValue]?) {
+    public init(source: String, externalId: String?, project: String?, title: String?, metadata: [String: JSONValue]?, kairosSessionId: String? = nil) {
         self.source = source
         self.externalId = externalId
         self.project = project
         self.title = title
         self.metadata = metadata
+        self.kairosSessionId = kairosSessionId
     }
 }
 
@@ -31,11 +35,13 @@ public struct ActivitiesCloseParams: Codable, Sendable, Equatable {
     public let source: String
     public let externalId: String?
     public let ts: Double
+    public let kairosSessionId: String?
 
-    public init(source: String, externalId: String?, ts: Double) {
+    public init(source: String, externalId: String?, ts: Double, kairosSessionId: String? = nil) {
         self.source = source
         self.externalId = externalId
         self.ts = ts
+        self.kairosSessionId = kairosSessionId
     }
 }
 
@@ -44,12 +50,29 @@ public struct EventsPostParams: Codable, Sendable, Equatable {
     public let kind: String
     public let ts: Double
     public let payload: JSONValue?
+    public let kairosSessionId: String?
 
-    public init(activity: ActivityRef?, kind: String, ts: Double, payload: JSONValue?) {
+    public init(activity: ActivityRef?, kind: String, ts: Double, payload: JSONValue?, kairosSessionId: String? = nil) {
         self.activity = activity
         self.kind = kind
         self.ts = ts
         self.payload = payload
+        self.kairosSessionId = kairosSessionId
+    }
+}
+
+/// A terminal focus transition from `kairos-pty`, keyed by the wrapper session.
+/// The daemon resolves `kairosSessionId` to an activity (via the hook-populated
+/// map) and appends `ai_focus`/`ai_blur` (M4).
+public struct FocusReportParams: Codable, Sendable, Equatable {
+    public let kairosSessionId: String
+    public let focused: Bool
+    public let ts: Double
+
+    public init(kairosSessionId: String, focused: Bool, ts: Double) {
+        self.kairosSessionId = kairosSessionId
+        self.focused = focused
+        self.ts = ts
     }
 }
 
