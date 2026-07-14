@@ -87,8 +87,30 @@ struct CodecTests {
     }
 
     @Test
+    func notifyUserRequestRoundTrip() throws {
+        let params = NotifyUserParams(
+            source: "claude-code",
+            kind: "pty_recommended",
+            title: "Run Claude Code via kairos for focus tracking",
+            message: "Claude Code started without kairos."
+        )
+        let env = RequestEnvelope(method: .notifyUser, params: try Wire.encodeValue(params))
+        let line = try LineCodec.encodeRequest(env)
+
+        #expect(!line.contains("\n"))
+        #expect(line.contains("\"method\":\"notify.user\""))
+        #expect(line.contains("\"source\":\"claude-code\""))
+
+        let back = try LineCodec.decodeRequest(line)
+        #expect(back.method == .notifyUser)
+        let p = try Wire.decodeValue(back.params, as: NotifyUserParams.self)
+        #expect(p.kind == "pty_recommended")
+        #expect(p.title == "Run Claude Code via kairos for focus tracking")
+    }
+
+    @Test
     func resultResponseRoundTrip() throws {
-        let result = ActivitiesOpenResult(activityId: 42)
+        let result = ActivitiesStartResult(activityId: 42)
         let resp: ResponseEnvelope = .result(try Wire.encodeValue(result))
         let line = try LineCodec.encodeResponse(resp)
         let back = try LineCodec.decodeResponse(line)
@@ -97,14 +119,14 @@ struct CodecTests {
             Issue.record("expected result envelope")
             return
         }
-        let r = try Wire.decodeValue(v, as: ActivitiesOpenResult.self)
+        let r = try Wire.decodeValue(v, as: ActivitiesStartResult.self)
         #expect(r.activityId == 42)
     }
 
     @Test
     func segmentsGetResultRoundTrip() throws {
         let result = SegmentsGetResult(
-            segments: [WireSegment(activityId: 1, start: 100, end: 200, seconds: 100, rule: "explicit")],
+            segments: [WireSegment(activityId: 1, start: 100, end: 200, seconds: 100, rule: "focus")],
             activities: [
                 "1": WireActivity(
                     source: "claude-code",

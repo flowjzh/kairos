@@ -34,12 +34,18 @@ fn run() -> i32 {
     let Some(input) = serde_json::from_slice::<hook::HookInput>(&data).ok() else {
         return 0;
     };
-    let Some(request) = hook::request(&input, kid.as_deref(), now) else {
-        return 0;
-    };
 
-    // Fire-and-forget: spool on failure, swallow everything else. Always exit 0.
     let client = SocketClient::new(&socket, &spool);
-    let _ = client.send(&request, true);
+
+    // The activity RPC: spool it if the daemon is down — it's real data.
+    if let Some(request) = hook::request(&input, kid.as_deref(), now) {
+        let _ = client.send(&request, true);
+    }
+
+    // A transient nudge when the agent started without `kairos` — never spooled,
+    // since a stale "launch via kairos" reminder long after the fact is noise.
+    if let Some(notify) = hook::notify_unwrapped(&input.hook_event_name, kid.as_deref()) {
+        let _ = client.send(&notify, false);
+    }
     0
 }

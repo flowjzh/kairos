@@ -27,26 +27,39 @@ The daemon has **no source-specific knowledge** — methods speak in generic act
 ### Ingest (clients)
 
 ```
-activities.open    { source, external_id?, project?, title?, metadata?, kairos_session_id? }
-                   → { activity_id }                  # idempotent on (source, external_id)
-activities.close   { source, external_id?, ts, kairos_session_id? }
-                   → {}
+activities.start   { source, external_id?, project?, title?, metadata?, kairos_session_id?, afk_immune? }
+                   → { activity_id }                  # create-or-RESUME; sets state=active; NO event
+activities.stop    { source, external_id?, kairos_session_id? }
+                   → {}                               # sets state=stopped; NO event
+activities.ensure  { kairos_session_id, source, project?, title?, ts }
+                   → { activity_id }                  # idempotent: create only if the kid is unclaimed (wrapper's 5s call)
 events.post        { activity: {source, external_id}, kind, ts, payload?, kairos_session_id? }
-                   → {}                               # appended; fire-and-forget
+                   → {}                               # appended; fire-and-forget (ai_submit/ai_stop/activity_override)
 focus.report       { kairos_session_id, focused: bool, ts }
-                   → {}                               # → focus / blur (M4; generic)
+                   → {}                               # → focus / blur (M4; the timing base since M4p3)
 ```
 
-`source` and `project` are slugs — the daemon auto-registers them (upsert into `sources`/`projects`) on first sight, so a new agent/project needs no prior setup. `activities.open` creates the identity row (see [03](./03-data-model.md)) and emits `activity_open`; `activities.close` emits `activity_close`. A meeting/manual with a direct client follows `activities.open` with `events.post` `kind=activity_override`. `events.post` is activity-scoped (it requires an activity); global events are written by the daemon itself — afk by the idle sampler directly to the store, and pause via `control.pause`.
+`source` and `project` are slugs — the daemon auto-registers them (upsert into `sources`/`projects`) on first sight. **Since M4p3** `activities.start`/`stop` are pure identity + lifecycle declarations that write **no event**: `start` creates-or-resumes the row and sets `state=active` (resume = a `stopped` row with the same `(source, external_id)` flips back to `active`); `stop` sets `state=stopped`. Timing comes only from `focus`/`blur` (via `focus.report`). `activities.ensure` is the PTY wrapper's post-launch call (after ~5 s): the daemon creates a `source=pty` activity **only if** the `kairos_session_id` is still unclaimed by a hook — so a wrapped `vim`/`ssh` gets an activity while `kairos claude` (whose `SessionStart` already claimed the kid) is a no-op. A meeting/manual with a direct client follows `activities.start` with `events.post` `kind=activity_override`.
 
-**`kairos_session_id` + `focus.report` (M4).** When Claude is launched under `kairos` (the PTY fallback), every hook RPC carries the wrapper's `kairos_session_id`; the daemon keeps an ephemeral in-memory map `kairos_session_id → (source, external_id)`, refreshed on each hook (last-write-wins), so it survives a daemon restart via the next hook. The wrapper reports terminal focus transitions with `focus.report` (best-effort — dropped if the socket is down); the daemon resolves the map to the activity and appends `focus` (focus-in) or `blur` (focus-out). A report that arrives before the mapping exists is buffered (latest wins) and flushed on registration; one that can't be resolved is dropped. The wire format is defined canonically in Rust `libs/codec`; the daemon's `KairosRPC` is its Swift hand-mirror (M4p2).
+**`kairos_session_id` + `focus.report` (M4 / M4p3).** When a command is launched under `kairos` (the PTY fallback), the wrapper injects a `kairos_session_id` (kid) and every agent hook RPC carries it; the daemon keeps an ephemeral in-memory map `kid → activity`, refreshed on each hook (last-write-wins), so it survives a daemon restart via the next hook. The wrapper reports focus transitions with `focus.report` (best-effort — dropped if the socket is down); the daemon resolves the map to the activity and appends `focus`/`blur`. A report that arrives before the mapping exists is buffered (latest wins) and flushed on registration. Since **M4p3** `focus`/`blur` are the timing base and the daemon owns two derived behaviours: on a foreground `blur` with no successor it **auto-catches** to an active manual backdrop by materialising a `focus` event (0→none, 1→auto, >1→most-recent + a menu notification); and the wrapper's launch `focus.report` + `activities.ensure` make it the first axis for activity creation (Design B — the hook enriches, it does not open a competing activity). The wire format is defined canonically in Rust `libs/codec`; the daemon's `KairosRPC` is its Swift hand-mirror (M4p2).
+
+### Notifications (plugin → user)
+
+```
+notify.user   { source, kind, title, subtitle?, message, cooldown_seconds? }
+              → {}    # daemon posts a native macOS notification; throttled only if cooldown_seconds is set
+```
+
+A plugin asks the daemon to nudge the user — e.g. the agent started **without** `kairos`, so focus/blur timing is missing, and the user should relaunch via `kairos`. The **plugin** owns *whether* to notify, the *wording* (`title`/`subtitle`/`message`), and *how often* (`cooldown_seconds`, optional): if present, the daemon delivers at most once per that many seconds per `(source, kind)` (in-memory — resets on daemon restart); if omitted, every call is delivered. `subtitle`, if set, is a smaller line under the title — a way to set a command apart on its own line, since native notifications have no inline code/monospace style. The daemon never decides this on its own: a future plugin that reports its own focus needs no PTY wrap and must not be nagged for lacking a `kairos_session_id`, so the orphan check stays in the plugin. (claude-code omits `cooldown_seconds` — it wants a nudge on every unwrapped start, since relaunching frequently and forgetting the `kairos` prefix is exactly the case to catch.) `notify.user` is **never spooled** — a stale nudge replayed after a daemon outage is noise (the activity RPC beside it is spooled as usual).
 
 ### Control (config UI / menu bar / CLI)
 
 ```
 control.pause   { paused: bool, ts }              # → pause_on / pause_off
-control.owner   { source, external_id?, ts }      # → force_owner
+focus.set       { source, external_id?, ts }       # → focus (source=manual); the manual switch / override
 ```
+
+`focus.set` is the menu's manual switch (and the replacement for the removed `force_owner`): it materialises a `focus` event for the chosen activity, which the latest-wins reducer makes the current holder.
 
 ### Config: clients & project→client mapping
 
@@ -70,7 +83,7 @@ segments.get   { from, to, project?, client? }
   # segments COMPUTED on request; client/billable resolved via the mapping at read time.
   # source/project returned as slugs; client as {id, name}.
 
-owner.get      → { activity: {source, external_id, project, title} | null }
+focused.get    → { activity: {source, external_id, project, title} | null }   # the single focused activity (M4p3)
 
 snapshots.create  { label?, from, to, params? }
   → { id, watermarks: {events, project_client_map}, segments_digest, generated_at }
@@ -87,11 +100,11 @@ The CLI is a **pure socket client** — it links **no** attribution library and 
 
 ```
 # client side
-kairos activity open  --source claude-code --id <session_id> --project daemonclaw \
+kairos activity start --source claude-code --id <session_id> --project daemonclaw \
                       --meta transcript_path=<path> --meta cwd=<cwd>
 kairos event  --source claude-code --id <session_id> --kind ai_submit [--ts <epoch>]
 kairos event  --source claude-code --id <session_id> --kind ai_stop
-kairos activity close --source claude-code --id <session_id>
+kairos activity stop  --source claude-code --id <session_id>
 
 # config
 kairos client add "Acme"                  # → prints id
@@ -101,7 +114,7 @@ kairos map unset --project daemonclaw
 
 # control
 kairos pause on
-kairos owner --source claude-code --id <session_id>
+kairos focus --source claude-code --id <session_id>    # manual switch (→ focus.set)
 
 # consumer side (daemon computes; CLI just prints)
 kairos export --from <epoch> --to <epoch> [--client <id>] [--project <name>] --format json
@@ -134,7 +147,7 @@ If the daemon socket is unavailable, `kairos event` / `kairos activity` append t
 
 ## Guarantees & conventions
 
-- **Idempotency:** `activities.open` is idempotent on `(source, external_id)`.
+- **Idempotency:** `activities.start` is idempotent on `(source, external_id)` (create-or-resume); `activities.ensure` no-ops if the kid is already claimed.
 - **Append-only config:** `mapping.set` only ever appends; there is no update/delete of a mapping row.
 - **No callbacks to clients:** the daemon never initiates connections; the config UI is in-process.
 - **Best-effort ingest:** a failed method call is dropped by the caller (or spooled); ingestion never blocks the host.

@@ -8,7 +8,8 @@ enum Schema {
         CREATE TABLE sources (
           id           INTEGER PRIMARY KEY,
           slug         TEXT NOT NULL UNIQUE,
-          display_name TEXT NOT NULL
+          display_name TEXT NOT NULL,
+          manual       INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE projects (
@@ -29,6 +30,7 @@ enum Schema {
           project_id   INTEGER REFERENCES projects(id),
           title        TEXT,
           metadata     TEXT,
+          state        INTEGER NOT NULL DEFAULT 0,
           UNIQUE (source_id, external_id)
         );
 
@@ -37,7 +39,7 @@ enum Schema {
           ts           REAL NOT NULL,
           activity_id  INTEGER REFERENCES activities(id),
           source_id    INTEGER NOT NULL REFERENCES sources(id),
-          kind         TEXT NOT NULL,
+          kind         INTEGER NOT NULL,
           payload      TEXT
         );
 
@@ -75,5 +77,12 @@ enum Schema {
           BEGIN SELECT RAISE(ABORT,'append-only'); END;
         CREATE TRIGGER map_immutable_d BEFORE DELETE ON project_client_map
           BEGIN SELECT RAISE(ABORT,'append-only'); END;
+
+        -- Built-in sources. `manual` (user-managed, backdrop-eligible) is the one
+        -- manual source; auto sources (claude-code, pty, ...) default to
+        -- manual=0. `pty` is seeded so the wrapper's terminal activities carry a
+        -- built-in "Terminal" label without a plugin to report one.
+        INSERT INTO sources (slug, display_name, manual) VALUES ('manual', 'manual', 1);
+        INSERT INTO sources (slug, display_name, manual) VALUES ('pty', 'Terminal', 0);
     """#
 }

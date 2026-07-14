@@ -17,9 +17,10 @@ public struct OverridePayload: Codable, Sendable {
     enum CodingKeys: String, CodingKey { case clientId = "client_id"; case billable }
 }
 
-/// `afk_on` payload (docs/06): why the afk span began.
+/// `afk_on` payload (docs/06): why the afk span began, as the compact `Int`
+/// code of the reason enum (idle=0, sleep=1, offline=2) — not a text slug.
 public struct AfkOnPayload: Codable, Sendable {
-    public let reason: String
+    public let reason: Int
 
-    public init(reason: String) { self.reason = reason }
+    public init(reason: Int) { self.reason = reason }
 }

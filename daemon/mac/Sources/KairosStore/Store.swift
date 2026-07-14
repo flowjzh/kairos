@@ -80,6 +80,14 @@ public actor Store {
         throw StoreError.sqlite(message: "upsert \(table) returned no row")
     }
 
+    /// Record a source's human-facing display name (the plugin owns its label,
+    /// M4p3). Upserts the source and sets `display_name`.
+    public func setSourceDisplayName(slug: String, displayName: String) throws {
+        let stmt = try db.prepare("INSERT INTO sources (slug, display_name) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET display_name=excluded.display_name")
+        try stmt.bind([.text(slug), .text(displayName)])
+        _ = try stmt.step()
+    }
+
     private func lookupSource(slug: String) throws -> Int64? {
         let stmt = try db.prepare("SELECT id FROM sources WHERE slug=?")
         try stmt.bind([.text(slug)])
@@ -95,7 +103,7 @@ public actor Store {
             .double(ts),
             activityId.map { .int($0) } ?? .null,
             .int(sourceId),
-            .text(kind.rawValue),
+            .int(Int64(kind.rawValue)),
             try jsonTextValue(payload),
         ])
         if try stmt.step() {
@@ -133,18 +141,19 @@ public actor Store {
         return nil
     }
 
-    /// Idempotent on `(source, external_id)` when `externalId` is non-nil:
-    /// re-opening returns the existing id and emits no new `activity_open`
-    /// event. A NULL `externalId` (meeting/manual) always creates a new row.
-    public func openActivity(source: String, externalId: String?, project: String?, title: String?, metadata: Data?, ts: Double) throws -> Int64 {
+    /// Create-or-resume an activity (M4p3): idempotent on `(source, external_id)`.
+    /// A matching row (e.g. a `stopped` claude session being resumed by the same
+    /// `claude_sid`) is flipped back to `active` and returned; a NULL
+    /// `externalId` (menu/manual) always creates a new row. Writes **no event** —
+    /// timing is `focus`/`blur`, lifecycle is the mutable `state` column.
+    public func startActivity(source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws -> Int64 {
         let sourceId = try resolveSource(slug: source)
         let projectId = try project.map { try resolveProject(slug: $0) }
         if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
+            try setActivityState(activityId: existing, .active)
             return existing
         }
-        let id = try insertActivity(sourceId: sourceId, externalId: externalId, projectId: projectId, title: title, metadata: metadata)
-        _ = try appendEvent(activityId: id, sourceId: sourceId, kind: .activityOpen, ts: ts, payload: nil)
-        return id
+        return try insertActivity(sourceId: sourceId, externalId: externalId, projectId: projectId, title: title, metadata: metadata)
     }
 
     private func insertActivity(sourceId: Int64, externalId: String?, projectId: Int64?, title: String?, metadata: Data?) throws -> Int64 {
@@ -156,26 +165,109 @@ public actor Store {
             title.map { .text($0) } ?? .null,
             try jsonTextValue(metadata),
         ])
-        if try stmt.step() { return stmt.columnInt64(0) }
+        if try stmt.step() { let id = stmt.columnInt64(0); signalChange(); return id }
         throw StoreError.sqlite(message: "insert activity returned no row")
     }
 
-    public func closeActivity(activityId: Int64, ts: Double) throws {
+    /// Set an activity's lifecycle/visibility state (M4p3). Mutable, not
+    /// watermarked, never read by attribution — `activities.stop` sets `stopped`,
+    /// archiving sets `archived`.
+    public func setActivityState(activityId: Int64, _ state: ActivityState) throws {
+        let stmt = try db.prepare("UPDATE activities SET state=? WHERE id=?")
+        try stmt.bind([.int(Int64(state.rawValue)), .int(activityId)])
+        _ = try stmt.step()
+        signalChange()
+    }
+
+    /// Enrich a wrapper-created `pty` shell into an agent activity (Design B race
+    /// fallback, M4p3): re-point its source/external_id/project/title/metadata and
+    /// mark it active. Keeps the id, so focus events already on the shell stay.
+    public func enrichActivity(activityId: Int64, source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws {
+        let sourceId = try resolveSource(slug: source)
+        let projectId = try project.map { try resolveProject(slug: $0) }
+        let stmt = try db.prepare("UPDATE activities SET source_id=?, external_id=?, project_id=COALESCE(?, project_id), title=COALESCE(?, title), metadata=COALESCE(?, metadata), state=? WHERE id=?")
+        try stmt.bind([
+            .int(sourceId),
+            externalId.map { .text($0) } ?? .null,
+            projectId.map { .int($0) } ?? .null,
+            title.map { .text($0) } ?? .null,
+            try jsonTextValue(metadata),
+            .int(Int64(ActivityState.active.rawValue)),
+            .int(activityId),
+        ])
+        _ = try stmt.step()
+        signalChange()
+    }
+
+    /// Reconcile a wrapper-created shell with an agent's `activities.start`
+    /// (Design B, M4p3). One place owns "which activity wins", returning its id:
+    ///   1. a pre-existing `(source, external_id)` row (e.g. a resumed session) —
+    ///      resume it, and retire the now-redundant shell if one was spawned;
+    ///   2. else the shell, enriched in place into this agent activity (keeps its
+    ///      id, so a launch `focus` already on it stays attributed here);
+    ///   3. else a fresh activity (no shell, no prior row).
+    /// `shellId` is the kid's current activity when it is a different source than
+    /// `source` (a `pty` shell to adopt), else nil.
+    ///
+    /// Corner (rare): in case 1 the shell's launch-`focus` interval stays on the
+    /// `pty` source — the append-only log forbids re-homing it — so a few seconds
+    /// before a *resumed* session is recognised bill to `pty`, not the agent.
+    public func adoptOrStart(shellId: Int64?, source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws -> Int64 {
+        // A `shellId` is only an adoptable shell if it is a *different* source
+        // (a `pty` shell an agent hook is now claiming); a same-source id is the
+        // activity itself, handled by the resume/start branches below.
+        let shell = try shellId.flatMap { id -> Int64? in
+            try loadActivity(id: id).flatMap { $0.source != source ? id : nil }
+        }
+        if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
+            try setActivityState(activityId: existing, .active)
+            if let shell, shell != existing { try setActivityState(activityId: shell, .stopped) }
+            return existing
+        }
+        if let shell {
+            try enrichActivity(activityId: shell, source: source, externalId: externalId, project: project, title: title, metadata: metadata)
+            return shell
+        }
+        return try startActivity(source: source, externalId: externalId, project: project, title: title, metadata: metadata)
+    }
+
+    /// Append an activity-scoped event, looking up the activity's own source.
+    /// Used for `focus`/`blur`/`activity_override` where the caller has only the id.
+    public func appendActivityEvent(activityId: Int64, kind: EventKind, ts: Double, payload: Data? = nil) throws {
         let stmt = try db.prepare("SELECT source_id FROM activities WHERE id=?")
         try stmt.bind([.int(activityId)])
         guard try stmt.step() else { throw StoreError.notFound("activity \(activityId)") }
-        let sourceId = stmt.columnInt64(0)
-        _ = try appendEvent(activityId: activityId, sourceId: sourceId, kind: .activityClose, ts: ts, payload: nil)
+        _ = try appendEvent(activityId: activityId, sourceId: stmt.columnInt64(0), kind: kind, ts: ts, payload: payload)
+    }
+
+    /// Is this activity's source `manual` (backdrop-eligible)? Gates auto-catch:
+    /// a foreground (auto) blur falls back to a backdrop; a manual one does not.
+    public func isActivityManual(activityId: Int64) throws -> Bool {
+        let stmt = try db.prepare("SELECT s.manual FROM activities a JOIN sources s ON s.id = a.source_id WHERE a.id=?")
+        try stmt.bind([.int(activityId)])
+        return try stmt.step() ? stmt.columnInt64(0) != 0 : false
     }
 
     // MARK: Helpers
 
+    /// The activity SELECT fragment. Column order is a contract for the two
+    /// position-indexed readers below — `readActivityRow` (0-5, 7-8; it skips
+    /// `project_id` at 6, which only `loadActivities` reads) and `loadActivities`
+    /// (0-6). Reordering this SELECT silently corrupts both; update together.
     private static let activitySelect = """
-        SELECT a.id, s.slug, a.external_id, p.slug, a.title, a.metadata, a.project_id
+        SELECT a.id, s.slug, a.external_id, p.slug, a.title, a.metadata, a.project_id, s.manual, s.display_name
         FROM activities a
         JOIN sources s ON s.id = a.source_id
         LEFT JOIN projects p ON p.id = a.project_id
         """
+
+    /// The event SELECT fragment — column order is the contract for `readEventRow`.
+    private static let eventSelect = "SELECT id, ts, activity_id, source_id, kind, payload FROM events"
+
+    /// Comma-joined rawValues of the event kinds `GlobalState.reduce` reads,
+    /// for the `WHERE kind IN (…)` of `loadGlobalEvents` (a literal, not rebuilt per call).
+    private static let globalEventKinds = [EventKind.focus, .blur, .afkOn, .afkOff, .pauseOn, .pauseOff]
+        .map { String($0.rawValue) }.joined(separator: ",")
 
     private func readActivityRow(_ stmt: SQLiteStatement) -> ActivityRecord {
         ActivityRecord(
@@ -184,7 +276,9 @@ public actor Store {
             externalId: stmt.columnText(2),
             project: stmt.columnText(3),
             title: stmt.columnText(4),
-            metadata: stmt.columnUTF8Data(5)
+            metadata: stmt.columnUTF8Data(5),
+            manual: stmt.columnInt64(7) != 0,
+            displayName: stmt.columnText(8) ?? ""
         )
     }
 
@@ -192,7 +286,7 @@ public actor Store {
     /// payload` row; nil for an unknown kind (forward-compat with new event
     /// kinds a reader doesn't recognise).
     private func readEventRow(_ stmt: SQLiteStatement) -> Event? {
-        guard let kind = EventKind(rawValue: stmt.columnText(4) ?? "") else { return nil }
+        guard let kind = EventKind(rawValue: Int(stmt.columnInt64(4))) else { return nil }
         return Event(
             id: stmt.columnInt64(0),
             ts: stmt.columnDouble(1),
@@ -201,6 +295,24 @@ public actor Store {
             sourceId: stmt.columnInt64(3),
             payload: stmt.columnUTF8Data(5)
         )
+    }
+
+    /// Run a `SELECT … FROM events` (the columns must match `readEventRow`) and
+    /// collect the rows, skipping forward-compat unknown kinds.
+    private func queryEvents(_ sql: String, _ values: [SQLValue] = []) throws -> [Event] {
+        let stmt = try db.prepare(sql)
+        try stmt.bind(values)
+        var events: [Event] = []
+        while try stmt.step() { if let e = readEventRow(stmt) { events.append(e) } }
+        return events
+    }
+
+    /// Run a `\(activitySelect) …` query and collect the activity rows.
+    private func queryActivities(_ sql: String) throws -> [ActivityRecord] {
+        let stmt = try db.prepare(sql)
+        var result: [ActivityRecord] = []
+        while try stmt.step() { result.append(readActivityRow(stmt)) }
+        return result
     }
 
     private func readClientBillable(_ stmt: SQLiteStatement, clientAt: Int32, billableAt: Int32) -> (clientId: Int64?, billable: Bool) {
@@ -306,49 +418,32 @@ public actor Store {
 
     // MARK: Event reads (for attribution + watermark-bounded reproduction)
 
+    /// Watermark-bounded load for snapshot reproduction / future external
+    /// readers — no internal caller yet (snapshots are reserved, docs/03).
     public func loadEvents(upToWatermark wm: Int64? = nil, beforeTs: Double? = nil) throws -> [Event] {
-        var sql = "SELECT id, ts, activity_id, source_id, kind, payload FROM events"
+        var sql = "\(Self.eventSelect)"
         var clauses: [String] = []
         var values: [SQLValue] = []
         if let wm { clauses.append("id <= ?"); values.append(.int(wm)) }
         if let ts = beforeTs { clauses.append("ts <= ?"); values.append(.double(ts)) }
         if !clauses.isEmpty { sql += " WHERE " + clauses.joined(separator: " AND ") }
-        sql += " ORDER BY id"
-
-        let stmt = try db.prepare(sql)
-        try stmt.bind(values)
-        var events: [Event] = []
-        while try stmt.step() { if let e = readEventRow(stmt) { events.append(e) } }
-        return events
+        return try queryEvents(sql + " ORDER BY id", values)
     }
 
-    /// Events relevant to attributing `[from, to]`, bounded on the low end so
-    /// the read scales with the range, not all history. Loads:
-    /// - **every** event of any activity NOT closed before `from` (any `ts`) —
-    ///   the whole set is needed to compute that activity's windows and even
-    ///   its strategy signature; e.g. an ai window's closing `ai_submit` can
-    ///   land after `to`, and dropping it would misclassify the session as
-    ///   explicit (afk-immune) and mis-bill it;
-    /// - all global (afk/pause) events `ts <= to` — low-volume, and an on-span
-    ///   opened before `from` must still hole the range.
-    /// Activities closed before `from` (their time is entirely past) are
-    /// dropped — the history win. Over-inclusion is safe; under-inclusion is not.
+    /// Only the events `GlobalState.reduce` consumes — `focus`/`blur` and the
+    /// global afk/pause spans. Callers that need just the focus pointer and
+    /// paused/afk state (menu refresh, auto-catch, the idle sampler) load this
+    /// instead of the full log, skipping the high-volume ai/override rows.
+    public func loadGlobalEvents() throws -> [Event] {
+        try queryEvents("\(Self.eventSelect) WHERE kind IN (\(Self.globalEventKinds)) ORDER BY id")
+    }
+
+    /// All events with `ts <= to` (global and activity-scoped). Attribution
+    /// clips to `[from, to]`, and an open focus/afk/pause span opened before
+    /// `from` must still be seen, so the lower bound is not applied here.
+    /// Over-inclusion is safe; at this volume (docs/03) loading is milliseconds.
     public func loadEventsInRange(from: Double, to: Double) throws -> [Event] {
-        let sql = """
-            SELECT id, ts, activity_id, source_id, kind, payload FROM events
-            WHERE (activity_id IS NULL AND ts <= ?)
-               OR (activity_id IN (
-                     SELECT a.id FROM activities a
-                     WHERE NOT EXISTS (
-                       SELECT 1 FROM events c
-                       WHERE c.activity_id = a.id AND c.kind = 'activity_close' AND c.ts < ?)))
-            ORDER BY id
-            """
-        let stmt = try db.prepare(sql)
-        try stmt.bind([.double(to), .double(from)])
-        var events: [Event] = []
-        while try stmt.step() { if let e = readEventRow(stmt) { events.append(e) } }
-        return events
+        try queryEvents("\(Self.eventSelect) WHERE ts <= ? ORDER BY id", [.double(to)])
     }
 
     // MARK: Activity / client reads
@@ -367,26 +462,30 @@ public actor Store {
         return Client(id: stmt.columnInt64(0), name: stmt.columnText(1) ?? "")
     }
 
-    /// Activities opened but not yet closed (for the menu bar / config window).
-    public func openActivities() throws -> [ActivityRecord] {
-        let stmt = try db.prepare("""
-            \(Self.activitySelect)
-            WHERE EXISTS (SELECT 1 FROM events e WHERE e.activity_id = a.id AND e.kind = 'activity_open')
-              AND NOT EXISTS (SELECT 1 FROM events e WHERE e.activity_id = a.id AND e.kind = 'activity_close')
-            ORDER BY a.id
-            """)
-        var result: [ActivityRecord] = []
-        while try stmt.step() { result.append(readActivityRow(stmt)) }
-        return result
+    /// Active activities (the live menu switch list). Since M4p3 this reads the
+    /// mutable `state` column, not derived open/close events. Manual activities
+    /// sort above auto ones.
+    public func activeActivities() throws -> [ActivityRecord] {
+        try queryActivities("\(Self.activitySelect) WHERE a.state = \(ActivityState.active.rawValue) ORDER BY s.manual DESC, a.id")
     }
 
-    /// Full records for the given activity ids (order preserved). Hydrates the
-    /// open-activity set that `GlobalState` derives, so the menu reads one
-    /// reduced state instead of re-deriving open-ness in SQL (ADR 21).
-    public func activityRecords(ids: [Int64]) throws -> [ActivityRecord] {
-        guard !ids.isEmpty else { return [] }
-        let byId = try loadActivities(ids: ids)
-        return ids.compactMap { byId[$0]?.record }
+    /// Active **manual** (backdrop-eligible) activities — the auto-catch
+    /// fallback candidates when a foreground activity blurs (M4p3).
+    public func activeManualActivities() throws -> [ActivityRecord] {
+        try queryActivities("\(Self.activitySelect) WHERE a.state = \(ActivityState.active.rawValue) AND s.manual = 1 ORDER BY a.id")
+    }
+
+    /// **Stopped** manual activities — the *Recent Activities* list, ordered by
+    /// last time each was focused (most recent first). Active ones live in the
+    /// live switcher, archived ones are hidden — so starting one here removes it
+    /// from this list.
+    public func recentStoppedManualActivities() throws -> [ActivityRecord] {
+        try queryActivities("""
+            \(Self.activitySelect)
+            LEFT JOIN (SELECT activity_id, MAX(ts) lf FROM events WHERE kind=\(EventKind.focus.rawValue) GROUP BY activity_id) f ON f.activity_id = a.id
+            WHERE s.manual = 1 AND a.state = \(ActivityState.stopped.rawValue)
+            ORDER BY COALESCE(f.lf, 0) DESC, a.id DESC
+            """)
     }
 
     // MARK: segments.get pipeline (store → attribution → resolved clients)
@@ -461,7 +560,7 @@ public actor Store {
               SELECT activity_id, payload,
                      ROW_NUMBER() OVER (PARTITION BY activity_id ORDER BY id DESC) rn
               FROM events
-              WHERE kind = 'activity_override' AND id <= ? AND activity_id IN (\(placeholders(ids.count)))
+              WHERE kind = \(EventKind.activityOverride.rawValue) AND id <= ? AND activity_id IN (\(placeholders(ids.count)))
             ) WHERE rn = 1
             """)
         try stmt.bind([.int(watermark)] + ids.map { .int($0) })

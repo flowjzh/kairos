@@ -12,7 +12,7 @@ use crate::Value;
 pub struct EmptyResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActivitiesOpenResult {
+pub struct ActivitiesStartResult {
     pub activity_id: i64,
 }
 
@@ -77,7 +77,7 @@ pub struct SegmentsGetResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OwnerActivity {
+pub struct FocusedActivity {
     pub source: String,
     pub external_id: Option<String>,
     pub project: Option<String>,
@@ -85,6 +85,6 @@ pub struct OwnerActivity {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OwnerGetResult {
-    pub activity: Option<OwnerActivity>,
+pub struct FocusedGetResult {
+    pub activity: Option<FocusedActivity>,
 }

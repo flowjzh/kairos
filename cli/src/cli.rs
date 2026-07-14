@@ -140,29 +140,31 @@ pub fn build_request(
 ) -> Result<RequestEnvelope, CliError> {
     match command {
         "activity" => match subcommand {
-            Some("open") => Ok(RequestEnvelope::new(
-                Method::ActivitiesOpen,
-                serde_json::to_value(ActivitiesOpenParams {
+            Some("start") => Ok(RequestEnvelope::new(
+                Method::ActivitiesStart,
+                serde_json::to_value(ActivitiesStartParams {
                     source: flags.require("source")?,
                     external_id: flags.value("id").map(str::to_string),
                     project: flags.value("project").map(str::to_string),
                     title: flags.value("title").map(str::to_string),
                     metadata: flags.metadata_value(),
                     kairos_session_id: None,
+                    afk_immune: None,
+                    source_display_name: None,
                 })
                 .expect("encode"),
             )),
-            Some("close") => Ok(RequestEnvelope::new(
-                Method::ActivitiesClose,
-                serde_json::to_value(ActivitiesCloseParams {
-                    source: flags.require("source")?,
+            Some("stop") => Ok(RequestEnvelope::new(
+                Method::ActivitiesStop,
+                serde_json::to_value(ActivitiesStopParams {
+                    source: Some(flags.require("source")?),
                     external_id: flags.value("id").map(str::to_string),
-                    ts: flags.double("ts").unwrap_or(now),
                     kairos_session_id: None,
+                    ts: flags.double("ts").unwrap_or(now),
                 })
                 .expect("encode"),
             )),
-            _ => Err(CliError("usage: kairos activity open|close ...".into())),
+            _ => Err(CliError("usage: kairos activity start|stop ...".into())),
         },
         "event" => Ok(RequestEnvelope::new(
             Method::EventsPost,
@@ -186,9 +188,9 @@ pub fn build_request(
             })
             .expect("encode"),
         )),
-        "owner" => Ok(RequestEnvelope::new(
-            Method::ControlOwner,
-            serde_json::to_value(ControlOwnerParams {
+        "focus" => Ok(RequestEnvelope::new(
+            Method::FocusSet,
+            serde_json::to_value(FocusSetParams {
                 source: flags.require("source")?,
                 external_id: flags.value("id").map(str::to_string),
                 ts: flags.double("ts").unwrap_or(now),
@@ -268,7 +270,7 @@ pub fn run(args: &[String], socket_path: &str, spool_dir: &str) -> Result<(), Cl
     let command = args
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError("usage: kairos <activity|event|client|map|pause|owner|export> ...".into()))?;
+        .ok_or_else(|| CliError("usage: kairos <activity|event|client|map|pause|focus|export> ...".into()))?;
     let (subcommand, flag_args) = subcommand_of(command, &args[1..]);
     let flags = parse_flags(flag_args);
     let request = build_request(command, subcommand, &flags, crate::now_secs())?;
@@ -285,8 +287,8 @@ pub fn run(args: &[String], socket_path: &str, spool_dir: &str) -> Result<(), Cl
             ResponseEnvelope::Result(v) => {
                 if is_read {
                     println!("{v}");
-                } else if command == "activity" && subcommand == Some("open") {
-                    match serde_json::from_value::<ActivitiesOpenResult>(v) {
+                } else if command == "activity" && subcommand == Some("start") {
+                    match serde_json::from_value::<ActivitiesStartResult>(v) {
                         Ok(r) => println!("{}", r.activity_id),
                         Err(_) => println!("ok"),
                     }
@@ -333,11 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn activity_open_builds_request() {
+    fn activity_start_builds_request() {
         let f = flags(&["--source", "claude-code", "--id", "s1", "--project", "daemonclaw", "--title", "Build"]);
-        let req = build_request("activity", Some("open"), &f, NOW).unwrap();
-        assert_eq!(req.method, Method::ActivitiesOpen);
-        let p: ActivitiesOpenParams = serde_json::from_value(req.params).unwrap();
+        let req = build_request("activity", Some("start"), &f, NOW).unwrap();
+        assert_eq!(req.method, Method::ActivitiesStart);
+        let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.project.as_deref(), Some("daemonclaw"));
         assert_eq!(p.title.as_deref(), Some("Build"));
     }

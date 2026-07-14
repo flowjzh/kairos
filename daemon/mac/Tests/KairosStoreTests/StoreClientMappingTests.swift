@@ -61,7 +61,7 @@ struct StoreClientMappingTests {
         let s = try store()
         let acme = try await s.addClient(name: "Acme")
         try await s.setMapping(project: "daemonclaw", clientId: acme, billable: true)
-        let act = try await s.openActivity(source: "claude-code", externalId: "s1", project: "daemonclaw", title: nil, metadata: nil, ts: 0)
+        let act = try await s.startActivity(source: "claude-code", externalId: "s1", project: "daemonclaw", title: nil, metadata: nil)
         let resolved = try await s.resolveClient(
             activityId: act,
             eventsWatermark: try await s.eventsWatermark(),
@@ -76,7 +76,7 @@ struct StoreClientMappingTests {
         let acme = try await s.addClient(name: "Acme")
         let vault = try await s.addClient(name: "Vault")
         try await s.setMapping(project: "proj", clientId: acme, billable: true)
-        let act = try await s.openActivity(source: "meeting", externalId: nil, project: "proj", title: "Sync", metadata: nil, ts: 0)
+        let act = try await s.startActivity(source: "meeting", externalId: nil, project: "proj", title: "Sync", metadata: nil)
         let payload = try JSONSerialization.data(withJSONObject: ["client_id": Int(vault), "billable": false])
         let src = try await s.resolveSource(slug: "meeting")
         _ = try await s.appendEvent(activityId: act, sourceId: src, kind: .activityOverride, ts: 1, payload: payload)
@@ -91,7 +91,7 @@ struct StoreClientMappingTests {
     @Test
     func resolveClientUnassignedWhenNoMap() async throws {
         let s = try store()
-        let act = try await s.openActivity(source: "claude-code", externalId: "s1", project: "unmapped", title: nil, metadata: nil, ts: 0)
+        let act = try await s.startActivity(source: "claude-code", externalId: "s1", project: "unmapped", title: nil, metadata: nil)
         let resolved = try await s.resolveClient(
             activityId: act,
             eventsWatermark: try await s.eventsWatermark(),

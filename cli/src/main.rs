@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 const KNOWN_SUBCOMMANDS: &[&str] =
-    &["activity", "event", "client", "map", "pause", "owner", "export"];
+    &["activity", "event", "client", "map", "pause", "focus", "export"];
 
 /// Reserved non-subcommand words (also suggested on typos, never wrapped).
 const RESERVED: &[&str] = &["snapshot", "pty"];
@@ -62,6 +62,8 @@ fn dispatch(args: &[String], socket: &str, spool: &str) -> Result<u8, cli::CliEr
             Ok(2)
         }
         "pty" => Ok(pty::run(&args[1..], socket)),
+        // `kairos --project <slug> <cmd>` wraps <cmd> associated with a project.
+        "--project" => Ok(pty::run(args, socket)),
         cmd if KNOWN_SUBCOMMANDS.contains(&cmd) => {
             cli::run(args, socket, spool)?;
             Ok(0)

@@ -13,17 +13,18 @@ struct DispatcherTests {
         RequestEnvelope(method: method, params: params)
     }
 
-    private func openActivity(_ store: Store, source: String = "claude-code", externalId: String = "s1", project: String? = nil) async throws {
+    private func startActivity(_ store: Store, source: String = "claude-code", externalId: String = "s1", project: String? = nil) async throws {
         _ = await d.handle(
-            env(.activitiesOpen, try Wire.encodeValue(ActivitiesOpenParams(source: source, externalId: externalId, project: project, title: nil, metadata: nil))),
+            env(.activitiesStart, try Wire.encodeValue(ActivitiesStartParams(source: source, externalId: externalId, project: project, title: nil, metadata: nil))),
             store: store, now: now
         )
     }
 
     @Test
-    func eventsPostAppendsEvent() async throws {
+    func startWritesNoEvent_thenEventsPostAppends() async throws {
         let store = try Store(path: ":memory:")
-        try await openActivity(store)
+        try await startActivity(store)
+        #expect(try await store.eventsWatermark() == 0)   // start is identity/lifecycle only
         let resp = await d.handle(
             env(.eventsPost, try Wire.encodeValue(EventsPostParams(
                 activity: ActivityRef(source: "claude-code", externalId: "s1"),
@@ -32,13 +33,13 @@ struct DispatcherTests {
         )
         guard case .result(let v) = resp else { Issue.record("expected result"); return }
         #expect(v == .object([:]))   // empty result {}
-        #expect(try await store.eventsWatermark() == 2)   // activity_open + ai_submit
+        #expect(try await store.eventsWatermark() == 1)   // just ai_submit
     }
 
     @Test
     func eventsPostRejectsFutureTs() async throws {
         let store = try Store(path: ":memory:")
-        try await openActivity(store)
+        try await startActivity(store)
         let resp = await d.handle(
             env(.eventsPost, try Wire.encodeValue(EventsPostParams(
                 activity: ActivityRef(source: "claude-code", externalId: "s1"),
@@ -52,7 +53,7 @@ struct DispatcherTests {
     @Test
     func eventsPostRejectsUnknownKind() async throws {
         let store = try Store(path: ":memory:")
-        try await openActivity(store)
+        try await startActivity(store)
         let resp = await d.handle(
             env(.eventsPost, try Wire.encodeValue(EventsPostParams(
                 activity: ActivityRef(source: "claude-code", externalId: "s1"),
@@ -75,14 +76,16 @@ struct DispatcherTests {
     }
 
     @Test
-    func segmentsGetRoundTrips() async throws {
+    func focusSetThenStopProducesSegment() async throws {
         let store = try Store(path: ":memory:")
         let addResp = await d.handle(env(.clientsAdd, try Wire.encodeValue(ClientsAddParams(name: "Acme"))), store: store, now: now)
         guard case .result(let v) = addResp else { Issue.record(); return }
         let acme = try Wire.decodeValue(v, as: ClientsAddResult.self).id
         _ = await d.handle(env(.mappingSet, try Wire.encodeValue(MappingSetParams(project: "p1", clientId: acme, billable: true))), store: store, now: now)
-        try await openActivity(store, externalId: "s1", project: "p1")
-        _ = await d.handle(env(.activitiesClose, try Wire.encodeValue(ActivitiesCloseParams(source: "claude-code", externalId: "s1", ts: now() + 30))), store: store, now: now)
+        try await startActivity(store, externalId: "s1", project: "p1")
+        // focus at now, stop (blur) at now+30 → a 30s focus segment.
+        _ = await d.handle(env(.focusSet, try Wire.encodeValue(FocusSetParams(source: "claude-code", externalId: "s1", ts: now()))), store: store, now: now)
+        _ = await d.handle(env(.activitiesStop, try Wire.encodeValue(ActivitiesStopParams(source: "claude-code", externalId: "s1", ts: now() + 30))), store: store, now: { self.now() + 30 })
 
         let resp = await d.handle(
             env(.segmentsGet, try Wire.encodeValue(SegmentsGetParams(from: 0, to: now() + 100, project: nil, client: nil))),

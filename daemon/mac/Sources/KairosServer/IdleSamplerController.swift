@@ -11,6 +11,7 @@ import KairosStore
 /// polling is a system boundary (manual smoke); the logic is in `IdleSampler`.
 public final class IdleSamplerController: @unchecked Sendable {
     private let store: Store
+    private let sessions: SessionRegistry?
     private let threshold: Double
     private let pollInterval: Double
     private let sourceSlug: String
@@ -21,8 +22,9 @@ public final class IdleSamplerController: @unchecked Sendable {
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
 
-    public init(store: Store, threshold: Double = 60, pollInterval: Double = 5, sourceSlug: String = DaemonSources.idle) {
+    public init(store: Store, sessions: SessionRegistry? = nil, threshold: Double = 60, pollInterval: Double = 5, sourceSlug: String = DaemonSources.idle) {
         self.store = store
+        self.sessions = sessions
         self.threshold = threshold
         self.pollInterval = pollInterval
         self.sourceSlug = sourceSlug
@@ -86,11 +88,20 @@ public final class IdleSamplerController: @unchecked Sendable {
     private func append(_ transition: IdleTransition) async {
         switch transition {
         case .afkOn(let reason, let ts):
+            if await focusedIsAfkImmune(at: ts) { return }  // passive activity: no afk to deduct
             let payload = try? Wire.data(AfkOnPayload(reason: reason.rawValue))
             _ = try? await store.appendEvent(activityId: nil, sourceId: sourceId, kind: .afkOn, ts: ts, payload: payload)
         case .afkOff(let ts):
             _ = try? await store.appendEvent(activityId: nil, sourceId: sourceId, kind: .afkOff, ts: ts)
         }
+    }
+
+    /// True when the currently focused activity was started AFK-immune — the
+    /// idle sampler then suppresses `afk_on` (ADR 33), so the log has no span.
+    private func focusedIsAfkImmune(at ts: Double) async -> Bool {
+        guard let sessions, let events = try? await store.loadGlobalEvents(),
+              let focused = GlobalState.reduce(events: events, to: ts).focused else { return false }
+        return await sessions.isAfkImmune(focused)
     }
 }
 

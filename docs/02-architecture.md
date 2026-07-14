@@ -42,7 +42,7 @@ Everything else — event recording, attribution, export, summarization — is s
 ```
 
 1. The **idle sampler** samples every ~5s and appends only `afk_on`/`afk_off` *transitions* (not every sample) to `events`.
-2. **Clients** send events (`ai_stop`, `ai_submit`, explicit activity open/close, manual pause/force-owner) as line-JSON RPC to the socket; the daemon appends them to `events`. Overrides are just events too.
+2. **Clients** send events (`ai_stop`, `ai_submit`, `focus`/`blur`, manual `pause`) as line-JSON RPC to the socket; the daemon appends them to `events`. Activity identity/lifecycle (`activities.start`/`stop`) is a mutable column, not an event. Overrides are just events too.
 3. **Nothing derived is stored.** When someone asks for segments (menu bar, export, a consumer), the **attribution library** computes them from `events` on the spot. Data volume is tiny (<~500 events/day), so this is milliseconds.
 4. The **menu bar** shows the predicted current owner (computed) and is itself the manual client (start/stop meeting, force owner, pause).
 5. **Consumers** read segments and render output. A **snapshot** freezes *the recipe* (params + event watermark) so a submitted timesheet stays reproducible — see [03](./03-data-model.md).

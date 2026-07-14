@@ -2,9 +2,11 @@ import Foundation
 import KairosCore
 
 /// Why an afk span began (docs/06): idle timeout, system sleep, or a
-/// daemon-down/machine-off gap detected at startup.
-public enum IdleReason: String, Sendable {
-    case idle, sleep, offline
+/// daemon-down/machine-off gap detected at startup. **Storage is the `Int`
+/// rawValue** (in the `afk_on` payload), the same code-vs-slug split as
+/// `EventKind`/`ActivityState`.
+public enum IdleReason: Int, Sendable {
+    case idle = 0, sleep = 1, offline = 2
 }
 
 /// A transition the sampler wants recorded as an event.

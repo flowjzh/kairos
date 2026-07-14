@@ -19,18 +19,22 @@ use serde::{Deserialize, Serialize};
 /// unknown string fails to decode (mirrors Swift's `Method`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Method {
-    #[serde(rename = "activities.open")]
-    ActivitiesOpen,
-    #[serde(rename = "activities.close")]
-    ActivitiesClose,
+    #[serde(rename = "activities.start")]
+    ActivitiesStart,
+    #[serde(rename = "activities.stop")]
+    ActivitiesStop,
+    #[serde(rename = "activities.ensure")]
+    ActivitiesEnsure,
     #[serde(rename = "events.post")]
     EventsPost,
     #[serde(rename = "focus.report")]
     FocusReport,
+    #[serde(rename = "focus.set")]
+    FocusSet,
     #[serde(rename = "control.pause")]
     ControlPause,
-    #[serde(rename = "control.owner")]
-    ControlOwner,
+    #[serde(rename = "notify.user")]
+    NotifyUser,
     #[serde(rename = "clients.list")]
     ClientsList,
     #[serde(rename = "clients.add")]
@@ -43,8 +47,8 @@ pub enum Method {
     MappingSet,
     #[serde(rename = "segments.get")]
     SegmentsGet,
-    #[serde(rename = "owner.get")]
-    OwnerGet,
+    #[serde(rename = "focused.get")]
+    FocusedGet,
 }
 
 /// Error carried in a `{"error":{"code","message"}}` response.

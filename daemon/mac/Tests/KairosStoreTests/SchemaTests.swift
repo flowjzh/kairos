@@ -36,10 +36,10 @@ struct SchemaTests {
     @Test
     func eventsAppendOnlyRejectsUpdate() async throws {
         let s = try store()
-        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (1, 'test', 'test')")
-        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 1, 'afk_on', NULL)")
+        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (100, 'test', 'test')")
+        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 100, 5, NULL)")
         do {
-            try await s.exec("UPDATE events SET kind='x' WHERE id=1")
+            try await s.exec("UPDATE events SET kind=1 WHERE id=1")
             Issue.record("UPDATE on append-only events should be rejected")
         } catch is StoreError {
             // expected
@@ -49,8 +49,8 @@ struct SchemaTests {
     @Test
     func eventsAppendOnlyRejectsDelete() async throws {
         let s = try store()
-        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (1, 'test', 'test')")
-        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 1, 'afk_on', NULL)")
+        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (100, 'test', 'test')")
+        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 100, 5, NULL)")
         do {
             try await s.exec("DELETE FROM events WHERE id=1")
             Issue.record("DELETE on append-only events should be rejected")
@@ -62,7 +62,6 @@ struct SchemaTests {
     @Test
     func mapAppendOnlyRejectsUpdate() async throws {
         let s = try store()
-        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (1, 'test', 'test')")
         try await s.exec("INSERT INTO projects (id, slug, display_name) VALUES (1, 'p', 'p')")
         try await s.exec("INSERT INTO clients (id, name) VALUES (1, 'c')")
         try await s.exec("INSERT INTO project_client_map (id, project_id, client_id, billable, created_at) VALUES (1, 1, 1, 1, 0)")

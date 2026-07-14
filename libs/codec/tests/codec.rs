@@ -7,19 +7,21 @@ use serde_json::json;
 
 #[test]
 fn method_raw_values_match_spec() {
-    assert_eq!(serde_json::to_value(Method::ActivitiesOpen).unwrap(), json!("activities.open"));
-    assert_eq!(serde_json::to_value(Method::ActivitiesClose).unwrap(), json!("activities.close"));
+    assert_eq!(serde_json::to_value(Method::ActivitiesStart).unwrap(), json!("activities.start"));
+    assert_eq!(serde_json::to_value(Method::ActivitiesStop).unwrap(), json!("activities.stop"));
+    assert_eq!(serde_json::to_value(Method::ActivitiesEnsure).unwrap(), json!("activities.ensure"));
     assert_eq!(serde_json::to_value(Method::EventsPost).unwrap(), json!("events.post"));
     assert_eq!(serde_json::to_value(Method::FocusReport).unwrap(), json!("focus.report"));
+    assert_eq!(serde_json::to_value(Method::FocusSet).unwrap(), json!("focus.set"));
     assert_eq!(serde_json::to_value(Method::ControlPause).unwrap(), json!("control.pause"));
-    assert_eq!(serde_json::to_value(Method::ControlOwner).unwrap(), json!("control.owner"));
+    assert_eq!(serde_json::to_value(Method::NotifyUser).unwrap(), json!("notify.user"));
     assert_eq!(serde_json::to_value(Method::ClientsList).unwrap(), json!("clients.list"));
     assert_eq!(serde_json::to_value(Method::ClientsAdd).unwrap(), json!("clients.add"));
     assert_eq!(serde_json::to_value(Method::ClientsRename).unwrap(), json!("clients.rename"));
     assert_eq!(serde_json::to_value(Method::MappingList).unwrap(), json!("mapping.list"));
     assert_eq!(serde_json::to_value(Method::MappingSet).unwrap(), json!("mapping.set"));
     assert_eq!(serde_json::to_value(Method::SegmentsGet).unwrap(), json!("segments.get"));
-    assert_eq!(serde_json::to_value(Method::OwnerGet).unwrap(), json!("owner.get"));
+    assert_eq!(serde_json::to_value(Method::FocusedGet).unwrap(), json!("focused.get"));
 }
 
 // JSONValue fidelity → serde_json Value preserves int vs float.
@@ -86,6 +88,51 @@ fn events_post_request_round_trip() {
 }
 
 #[test]
+fn notify_user_request_round_trip() {
+    let params = NotifyUserParams {
+        source: "claude-code".into(),
+        kind: "pty_recommended".into(),
+        title: "Run Claude Code via kairos for focus tracking".into(),
+        subtitle: None,
+        message: "Claude Code started without kairos.".into(),
+        cooldown_seconds: None,
+    };
+    let env = RequestEnvelope::new(Method::NotifyUser, serde_json::to_value(&params).unwrap());
+    let line = encode_request(&env).unwrap();
+
+    assert!(!line.contains('\n'));
+    assert!(line.contains(r#""method":"notify.user""#));
+    assert!(line.contains(r#""source":"claude-code""#));
+
+    let back = decode_request(&line).unwrap();
+    assert_eq!(back.method, Method::NotifyUser);
+    let p: NotifyUserParams = serde_json::from_value(back.params).unwrap();
+    assert_eq!(p.kind, "pty_recommended");
+    assert_eq!(p.title, "Run Claude Code via kairos for focus tracking");
+}
+
+#[test]
+fn notify_user_with_cooldown_round_trip() {
+    let params = NotifyUserParams {
+        source: "codex".into(),
+        kind: "pty_recommended".into(),
+        title: "T".into(),
+        subtitle: Some("kairos codex".into()),
+        message: "M".into(),
+        cooldown_seconds: Some(1800.0),
+    };
+    let env = RequestEnvelope::new(Method::NotifyUser, serde_json::to_value(&params).unwrap());
+    let line = encode_request(&env).unwrap();
+    assert!(line.contains(r#""cooldown_seconds":1800.0"#));
+    assert!(line.contains(r#""subtitle":"kairos codex""#));
+
+    let back = decode_request(&line).unwrap();
+    let p: NotifyUserParams = serde_json::from_value(back.params).unwrap();
+    assert_eq!(p.cooldown_seconds, Some(1800.0));
+    assert_eq!(p.subtitle.as_deref(), Some("kairos codex"));
+}
+
+#[test]
 fn events_post_with_payload_round_trip() {
     let payload: Value = serde_json::from_str(r#"{"transcript_path":"/x/y.jsonl"}"#).unwrap();
     let params = EventsPostParams {
@@ -122,13 +169,13 @@ fn error_response_round_trip() {
 
 #[test]
 fn result_response_round_trip() {
-    let result = ActivitiesOpenResult { activity_id: 42 };
+    let result = ActivitiesStartResult { activity_id: 42 };
     let resp = ResponseEnvelope::Result(serde_json::to_value(&result).unwrap());
     let line = encode_response(&resp).unwrap();
     let back = decode_response(&line).unwrap();
     match back {
         ResponseEnvelope::Result(v) => {
-            let r: ActivitiesOpenResult = serde_json::from_value(v).unwrap();
+            let r: ActivitiesStartResult = serde_json::from_value(v).unwrap();
             assert_eq!(r.activity_id, 42);
         }
         _ => panic!("expected result envelope"),
@@ -143,7 +190,7 @@ fn segments_get_result_round_trip() {
             start: 100.0,
             end: 200.0,
             seconds: 100.0,
-            rule: "explicit".into(),
+            rule: "focus".into(),
         }],
         activities: [(
             "1".to_string(),

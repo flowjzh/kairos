@@ -16,23 +16,41 @@ pub struct ActivityRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActivitiesOpenParams {
+pub struct ActivitiesStartParams {
     pub source: String,
     pub external_id: Option<String>,
     pub project: Option<String>,
     pub title: Option<String>,
     pub metadata: Option<BTreeMap<String, Value>>,
-    /// The wrapping `kairos` PTY session, when launched under one — lets the
-    /// daemon map this activity's `external_id` to focus reports (M4).
+    /// The wrapping `kairos` PTY session, when launched under one — routes this
+    /// activity's focus reports by kid (M4).
     pub kairos_session_id: Option<String>,
+    /// Explicit activities may disable AFK detection while focused (M4p3).
+    pub afk_immune: Option<bool>,
+    /// Human-facing name for this source (the plugin owns its label); recorded on
+    /// `sources.display_name`.
+    pub source_display_name: Option<String>,
 }
 
+/// Stop (→ state=stopped). Resolvable by `(source, external_id)` (hook / menu) or
+/// by `kairos_session_id` (the wrapper's exit).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActivitiesCloseParams {
-    pub source: String,
+pub struct ActivitiesStopParams {
+    pub source: Option<String>,
     pub external_id: Option<String>,
-    pub ts: f64,
     pub kairos_session_id: Option<String>,
+    pub ts: f64,
+}
+
+/// The wrapper's ~5 s post-launch call: create a `pty` activity only if the kid
+/// is still unclaimed by a hook (Design B, M4p3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivitiesEnsureParams {
+    pub kairos_session_id: String,
+    pub source: String,
+    pub project: Option<String>,
+    pub title: Option<String>,
+    pub ts: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,8 +79,31 @@ pub struct ControlPauseParams {
     pub ts: f64,
 }
 
+/// A plugin's request to nudge the user with a native notification (e.g. the
+/// agent launched without `kairos`, so focus/blur is missing). The plugin owns
+/// the decision and the wording; the daemon only delivers and cooldown-gates by
+/// `(source, kind)`. Mirrors `KairosRPC.NotifyUserParams`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ControlOwnerParams {
+pub struct NotifyUserParams {
+    pub source: String,
+    pub kind: String,
+    pub title: String,
+    /// Optional secondary line under the title (rendered smaller). Used to put
+    /// the exact command on its own line (e.g. "kairos claude") — the platform
+    /// has no inline code/monospace style, so a separate line is the only way to
+    /// set it apart.
+    pub subtitle: Option<String>,
+    pub message: String,
+    /// If set, the daemon delivers at most once per this many seconds per
+    /// `(source, kind)`; if `None`, every call is delivered. Omitted by the
+    /// claude-code plugin (a nudge on every unwrapped start, not once/hour).
+    pub cooldown_seconds: Option<f64>,
+}
+
+/// Manual focus switch from the menu (→ a `focus` event); replaces the removed
+/// `force_owner` (M4p3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FocusSetParams {
     pub source: String,
     pub external_id: Option<String>,
     pub ts: f64,

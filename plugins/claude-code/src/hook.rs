@@ -43,29 +43,52 @@ pub fn request(input: &HookInput, kairos_session_id: Option<&str>, now: f64) -> 
             if let Some(cwd) = &input.cwd {
                 metadata.insert("cwd".into(), Value::String(cwd.clone()));
             }
-            let params = ActivitiesOpenParams {
+            let params = ActivitiesStartParams {
                 source: SOURCE.into(),
                 external_id: Some(input.session_id.clone()),
                 project,
                 title: None,
                 metadata: if metadata.is_empty() { None } else { Some(metadata) },
                 kairos_session_id: kid,
+                afk_immune: None,
+                // The plugin owns its source label. TODO(i18n): translate.
+                source_display_name: Some("Claude Code".into()),
             };
-            Some(RequestEnvelope::new(Method::ActivitiesOpen, serde_json::to_value(&params).ok()?))
+            Some(RequestEnvelope::new(Method::ActivitiesStart, serde_json::to_value(&params).ok()?))
         }
         "UserPromptSubmit" => event(&activity, "ai_submit", kid, now),
         "Stop" => event(&activity, "ai_stop", kid, now),
         "SessionEnd" => {
-            let params = ActivitiesCloseParams {
-                source: SOURCE.into(),
+            let params = ActivitiesStopParams {
+                source: Some(SOURCE.into()),
                 external_id: Some(input.session_id.clone()),
-                ts: now,
                 kairos_session_id: kid,
+                ts: now,
             };
-            Some(RequestEnvelope::new(Method::ActivitiesClose, serde_json::to_value(&params).ok()?))
+            Some(RequestEnvelope::new(Method::ActivitiesStop, serde_json::to_value(&params).ok()?))
         }
         _ => None,
     }
+}
+
+/// Build a `notify.user` request iff this is an unwrapped `SessionStart` — the
+/// agent launched directly, not under `kairos`, so focus/blur timing is missing.
+/// The plugin owns the decision and the wording; the daemon only delivers (and
+/// cooldown-gates) it. `None` for every other event, or when a kid is present.
+pub fn notify_unwrapped(event: &str, kairos_session_id: Option<&str>) -> Option<RequestEnvelope> {
+    if event != "SessionStart" || kairos_session_id.is_some() {
+        return None;
+    }
+    let params = NotifyUserParams {
+        source: SOURCE.into(),
+        kind: "pty_recommended".into(),
+        title: "Focus Tracking Off".into(),
+        subtitle: None,
+        message: "Claude Code started directly — relaunch via kairos to capture focus/blur.".into(),
+        // No cooldown: a nudge on every unwrapped start, not once per hour.
+        cooldown_seconds: None,
+    };
+    Some(RequestEnvelope::new(Method::NotifyUser, serde_json::to_value(&params).ok()?))
 }
 
 fn event(activity: &ActivityRef, kind: &str, kid: Option<String>, now: f64) -> Option<RequestEnvelope> {
@@ -107,8 +130,8 @@ mod tests {
     #[test]
     fn session_start_opens_activity_with_project_from_cwd() {
         let req = request(&default_input("SessionStart"), None, 100.0).unwrap();
-        assert_eq!(req.method, Method::ActivitiesOpen);
-        let p: ActivitiesOpenParams = serde_json::from_value(req.params).unwrap();
+        assert_eq!(req.method, Method::ActivitiesStart);
+        let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.source, "claude-code");
         assert_eq!(p.external_id.as_deref(), Some("sess-1"));
         assert_eq!(p.project.as_deref(), Some("daemonclaw"));
@@ -136,8 +159,8 @@ mod tests {
     #[test]
     fn session_end_closes_activity() {
         let req = request(&default_input("SessionEnd"), None, 400.0).unwrap();
-        assert_eq!(req.method, Method::ActivitiesClose);
-        let p: ActivitiesCloseParams = serde_json::from_value(req.params).unwrap();
+        assert_eq!(req.method, Method::ActivitiesStop);
+        let p: ActivitiesStopParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.external_id.as_deref(), Some("sess-1"));
         assert_eq!(p.ts, 400.0);
     }
@@ -163,7 +186,7 @@ mod tests {
     #[test]
     fn session_start_without_cwd_has_no_project() {
         let req = request(&input("SessionStart", None, None), None, 1.0).unwrap();
-        let p: ActivitiesOpenParams = serde_json::from_value(req.params).unwrap();
+        let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
         assert!(p.project.is_none());
         assert!(p.metadata.is_none());
     }
@@ -173,7 +196,7 @@ mod tests {
         let kid = "kpty-xyz";
         let open = request(&default_input("SessionStart"), Some(kid), 1.0).unwrap();
         assert_eq!(
-            serde_json::from_value::<ActivitiesOpenParams>(open.params).unwrap().kairos_session_id.as_deref(),
+            serde_json::from_value::<ActivitiesStartParams>(open.params).unwrap().kairos_session_id.as_deref(),
             Some(kid)
         );
         let submit = request(&default_input("UserPromptSubmit"), Some(kid), 1.0).unwrap();
@@ -183,7 +206,7 @@ mod tests {
         );
         let end = request(&default_input("SessionEnd"), Some(kid), 1.0).unwrap();
         assert_eq!(
-            serde_json::from_value::<ActivitiesCloseParams>(end.params).unwrap().kairos_session_id.as_deref(),
+            serde_json::from_value::<ActivitiesStopParams>(end.params).unwrap().kairos_session_id.as_deref(),
             Some(kid)
         );
     }
@@ -191,7 +214,7 @@ mod tests {
     #[test]
     fn kairos_session_id_absent_when_unwrapped() {
         let open = request(&default_input("SessionStart"), None, 1.0).unwrap();
-        assert!(serde_json::from_value::<ActivitiesOpenParams>(open.params).unwrap().kairos_session_id.is_none());
+        assert!(serde_json::from_value::<ActivitiesStartParams>(open.params).unwrap().kairos_session_id.is_none());
     }
 
     #[test]
@@ -199,5 +222,29 @@ mod tests {
         let submit = request(&default_input("UserPromptSubmit"), Some("k1"), 1.0).unwrap();
         let json = serde_json::to_string(&submit.params).unwrap();
         assert!(json.contains("kairos_session_id"));
+    }
+
+    #[test]
+    fn notify_unwrapped_only_when_session_start_without_kid() {
+        let notify = notify_unwrapped("SessionStart", None).unwrap();
+        assert_eq!(notify.method, Method::NotifyUser);
+        let p: NotifyUserParams = serde_json::from_value(notify.params).unwrap();
+        assert_eq!(p.source, "claude-code");
+        assert_eq!(p.kind, "pty_recommended");
+        assert_eq!(p.title, "Focus Tracking Off");
+        assert!(p.subtitle.is_none());
+        assert!(p.message.contains("focus/blur"));
+    }
+
+    #[test]
+    fn notify_unwrapped_none_when_kid_present() {
+        assert!(notify_unwrapped("SessionStart", Some("k1")).is_none());
+    }
+
+    #[test]
+    fn notify_unwrapped_none_for_other_events() {
+        assert!(notify_unwrapped("UserPromptSubmit", None).is_none());
+        assert!(notify_unwrapped("Stop", None).is_none());
+        assert!(notify_unwrapped("SessionEnd", None).is_none());
     }
 }

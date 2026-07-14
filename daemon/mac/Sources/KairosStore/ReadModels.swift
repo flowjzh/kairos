@@ -45,14 +45,20 @@ public struct ActivityRecord: Sendable, Equatable {
     public let project: String?
     public let title: String?
     public let metadata: Data?
+    /// The activity's source is user-managed (`manual`) vs tool-created (`auto`).
+    public let manual: Bool
+    /// The source's human-facing label (e.g. `pty` → "Terminal"), for the menu.
+    public let displayName: String
 
-    public init(id: Int64, source: String, externalId: String?, project: String?, title: String?, metadata: Data?) {
+    public init(id: Int64, source: String, externalId: String?, project: String?, title: String?, metadata: Data?, manual: Bool, displayName: String) {
         self.id = id
         self.source = source
         self.externalId = externalId
         self.project = project
         self.title = title
         self.metadata = metadata
+        self.manual = manual
+        self.displayName = displayName
     }
 }
 

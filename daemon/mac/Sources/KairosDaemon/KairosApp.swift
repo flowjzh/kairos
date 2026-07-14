@@ -1,9 +1,21 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 import KairosCore
 import KairosRPC
 import KairosServer
 import KairosStore
+
+/// The menu-bar icon as an `NSImage` — a symbol at an explicit point size, so the
+/// bar renders it at that intrinsic size (MenuBarExtra ignores SwiftUI `.frame`).
+private func menuBarIcon(afk: Bool) -> NSImage {
+    let name = afk ? "moon.zzz.fill" : "clock.fill"
+    let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+    let image = NSImage(systemSymbolName: name, accessibilityDescription: "Kairos")?
+        .withSymbolConfiguration(config) ?? NSImage()
+    image.isTemplate = true
+    return image
+}
 
 @main
 struct KairosApp: App {
@@ -13,11 +25,13 @@ struct KairosApp: App {
         MenuBarExtra {
             MenuContent(model: appDelegate.model)
         } label: {
-            Label(appDelegate.model.menuLabel, systemImage: appDelegate.model.isAfk ? "moon.zzz.fill" : "clock.fill")
+            Image(nsImage: menuBarIcon(afk: appDelegate.model.isAfk))
         }
-        Window("Activity", id: "activity") {
+        .menuBarExtraStyle(.window)
+        Window("New Activity", id: "activity") {
             ActivityView(model: appDelegate.model)
         }
+        .windowResizability(.contentSize)
         Window("Configure", id: "configure") {
             ConfigView(model: appDelegate.model)
         }
@@ -30,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var socketServer: SocketServer?
     private var sampler: IdleSamplerController?
     private var checkpointTimer: Timer?
+    private var notificationDelegate: NotificationDelegate?
 
     override init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -56,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dispatcher = model.dispatcher
 
         Task { @MainActor in
+            Notifier.requestAuth()
+            let nd = NotificationDelegate()
+            UNUserNotificationCenter.current().delegate = nd
+            self.notificationDelegate = nd
             _ = await Spooler(spoolDir: spoolDir).drain(dispatcher: dispatcher, store: store)
             self.socketServer = SocketServer(dispatcher: dispatcher, store: store)
             do {
@@ -63,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("kairos: socket server failed: \(error)")
             }
-            self.sampler = IdleSamplerController(store: store)
+            self.sampler = IdleSamplerController(store: store, sessions: model.sessions)
             await self.sampler?.start()
             await self.model.refresh()
             self.model.startRefresh()
@@ -102,11 +121,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @Observable
 final class DaemonModel {
     let store: Store
+    let sessions: SessionRegistry
     let dispatcher: Dispatcher
     private(set) var menuLabel = "Kairos"
     private(set) var isPaused = false
     private(set) var isAfk = false
-    private(set) var openActivities: [ActivityRecord] = []
+    private(set) var focusedId: Int64?
+    private(set) var activeActivities: [ActivityRecord] = []
+    private(set) var manualTasks: [ActivityRecord] = []
     private(set) var clients: [Client] = []
     private(set) var mappings: [ProjectMapping] = []
     private(set) var projects: [String] = []
@@ -116,7 +138,9 @@ final class DaemonModel {
 
     init(store: Store) {
         self.store = store
-        self.dispatcher = Dispatcher()
+        let sessions = SessionRegistry()
+        self.sessions = sessions
+        self.dispatcher = Dispatcher(sessions: sessions) { c in Notifier.post(title: c.title, subtitle: c.subtitle, body: c.message) }
     }
 
     func startRefresh() {
@@ -142,24 +166,26 @@ final class DaemonModel {
         if kairosSourceId == 0 {
             kairosSourceId = (try? await store.resolveSource(slug: DaemonSources.control)) ?? 0
         }
-        let events = (try? await store.loadEvents()) ?? []
+        let events = (try? await store.loadGlobalEvents()) ?? []
         let state = GlobalState.reduce(events: events, to: Date().timeIntervalSince1970)
-        let owner = state.owner
+        let focused = state.focused
 
         isPaused = state.isPaused
         isAfk = state.isAfk
+        focusedId = focused
 
         if isAfk {
             menuLabel = "Idle"
         } else if isPaused {
             menuLabel = "Paused"
-        } else if let owner, let record = try? await store.loadActivity(id: owner) {
+        } else if let focused, let record = try? await store.loadActivity(id: focused) {
             menuLabel = record.title ?? record.project ?? record.source
         } else {
             menuLabel = "Kairos"
         }
 
-        openActivities = (try? await store.activityRecords(ids: state.openActivities)) ?? []
+        activeActivities = (try? await store.activeActivities()) ?? []
+        manualTasks = (try? await store.recentStoppedManualActivities()) ?? []
         clients = (try? await store.listClients()) ?? []
         mappings = (try? await store.listMapping()) ?? []
         projects = (try? await store.listProjects()) ?? []
@@ -188,44 +214,225 @@ final class DaemonModel {
         await refresh()
     }
 
-    func newActivity(source: String, title: String, project: String?, clientId: Int64?, start: Double, end: Double?) async {
-        let id = (try? await store.openActivity(source: source, externalId: nil, project: project, title: title, metadata: nil, ts: start)) ?? 0
-        guard id != 0 else { return }
+    /// Start (or reactivate) a manual activity (M4p3): create-or-resume
+    /// the row (active) and write a `focus` at `start`. An end time writes a
+    /// `blur` and stops it; otherwise it stays the focused/active backdrop.
+    func startManualActivity(source: String, externalId: String?, title: String, project: String?, clientId: Int64?, afkImmune: Bool, start: Double, end: Double?) async {
+        guard let id = try? await store.startActivity(source: source, externalId: externalId, project: project, title: title.isEmpty ? nil : title, metadata: nil) else { return }
+        await sessions.setAfkImmune(id, afkImmune)
         if let clientId {
             let payload = try? Wire.data(OverridePayload(clientId: clientId, billable: nil))
-            let sourceId = (try? await store.resolveSource(slug: source)) ?? 0
-            _ = try? await store.appendEvent(activityId: id, sourceId: sourceId, kind: .activityOverride, ts: start, payload: payload)
+            try? await store.appendActivityEvent(activityId: id, kind: .activityOverride, ts: start, payload: payload)
         }
-        if let end { try? await store.closeActivity(activityId: id, ts: end) }
+        try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: start)
+        if let end {
+            try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: end)
+            try? await store.setActivityState(activityId: id, .stopped)
+        }
         await refresh()
     }
 
-    func closeActivity(_ id: Int64) async {
-        try? await store.closeActivity(activityId: id, ts: Date().timeIntervalSince1970)
+    /// Reactivate a stopped manual activity by its id (focus it now).
+    func reactivate(_ id: Int64) async {
+        try? await store.setActivityState(activityId: id, .active)
+        try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: Date().timeIntervalSince1970)
         await refresh()
+    }
+
+    /// Manual focus switch (green-dot activity), a `focus` event.
+    func focusActivity(_ id: Int64) async {
+        try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: Date().timeIntervalSince1970)
+        await refresh()
+    }
+
+    /// Stop (menu ✕): `blur` + state=stopped.
+    func stopActivity(_ id: Int64) async {
+        try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: Date().timeIntervalSince1970)
+        try? await store.setActivityState(activityId: id, .stopped)
+        await sessions.setAfkImmune(id, false)
+        await refresh()
+    }
+
+    /// Archive a manual activity: `blur` (no-op if not focused) + state=archived
+    /// — hidden from every list.
+    func archiveActivity(_ id: Int64) async {
+        try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: Date().timeIntervalSince1970)
+        try? await store.setActivityState(activityId: id, .archived)
+        await sessions.setAfkImmune(id, false)
+        await refresh()
+    }
+}
+
+/// A concrete `NSVisualEffectView` background so the main menu and the flyout
+/// popover use the *same* material (SwiftUI's `Material` can't name the menu
+/// material, so the two windows would otherwise blend differently).
+private struct VisualEffect: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .popover
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+    func updateNSView(_ view: NSVisualEffectView, context: Context) { view.material = material }
+}
+
+/// A menu row with a native-feeling hover highlight (the `.window` MenuBarExtra
+/// style doesn't highlight rows on its own).
+private struct HoverRow<Content: View>: View {
+    var onHover: ((Bool) -> Void)? = nil
+    @ViewBuilder var content: Content
+    @State private var hovering = false
+
+    var body: some View {
+        content
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hovering ? Color.primary.opacity(0.09) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5))
+            .onHover { h in hovering = h; onHover?(h) }
+            .padding(.horizontal, 5)
     }
 }
 
 private struct MenuContent: View {
     let model: DaemonModel
     @Environment(\.openWindow) private var openWindow
+    @State private var flyout: Int64?   // the Recent task whose submenu is open
+
+    // Every row reserves this leading column so all text starts at the same x.
+    private let iconColumn: CGFloat = 13
 
     var body: some View {
-        VStack {
-            if model.isAfk {
-                Text("Idle (auto)")
-            } else if model.isPaused {
-                Text("Paused")
-            } else {
-                Text(model.menuLabel)
+        VStack(alignment: .leading, spacing: 1) {
+            if !model.activeActivities.isEmpty {
+                sectionLabel("Active Activities")
+                ForEach(model.activeActivities, id: \.id) { a in
+                    HoverRow(onHover: { if $0 { flyout = nil } }) {
+                        HStack(spacing: 8) {
+                            // Left dot: green = focused, gray = not. Click the row to focus.
+                            Button { Task { await model.focusActivity(a.id) } } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "circle.fill")
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(model.focusedId == a.id ? Color.green : Color.gray)
+                                        .frame(width: iconColumn)
+                                    Text(rowLabel(a)).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            // Manual activities are stopped with ✕; auto ones
+                            // (pty/claude) appear and leave on their own → "auto".
+                            if a.manual {
+                                Button { Task { await model.stopActivity(a.id) } } label: {
+                                    Image(systemName: "xmark").font(.system(size: 10)).foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Stop")
+                            } else {
+                                Text("auto").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+                Divider().padding(.vertical, 3)
+            }
+
+            if !model.manualTasks.isEmpty {
+                sectionLabel("Recent Activities")
+                ForEach(model.manualTasks, id: \.id) { t in
+                    HoverRow(onHover: { if $0 { flyout = t.id } }) {
+                        HStack(spacing: 5) {
+                            Color.clear.frame(width: iconColumn, height: 1)   // align text with icon rows
+                            Text(t.title ?? "Activity").lineLimit(1)
+                            Spacer(minLength: 4)
+                            Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .popover(isPresented: flyoutBinding(t.id), arrowEdge: .trailing) {
+                        flyoutMenu(t)
+                    }
+                }
+                Divider().padding(.vertical, 3)
+            }
+
+            actionRow("New Activity…", "plus") { open("activity") }
+            actionRow("Configure…", "gearshape") { open("configure") }
+            actionRow(model.isPaused ? "Resume" : "Pause", model.isPaused ? "play.fill" : "pause.fill") {
+                Task { await model.togglePause() }
+            }
+            Divider().padding(.vertical, 3)
+            actionRow("Quit Kairos", "power") { NSApplication.shared.terminate(nil) }
+        }
+        .padding(.vertical, 6)
+        .frame(width: 250)
+        .background(VisualEffect())
+    }
+
+    // The right-flyout submenu for a Recent task — a plain view (not a native
+    // menu) so icons render and the material/position match the main menu.
+    @ViewBuilder private func flyoutMenu(_ t: ActivityRecord) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            flyoutRow("Start", "arrowtriangle.right.fill") {
+                flyout = nil; Task { await model.reactivate(t.id) }
+            }
+            flyoutRow("Archive", "arrow.down.to.line") {
+                flyout = nil; Task { await model.archiveActivity(t.id) }
             }
         }
-        Button(model.isPaused ? "Resume" : "Pause") { Task { await model.togglePause() } }
-        Divider()
-        Button("New activity…") { open("activity") }.keyboardShortcut("n")
-        Button("Configure…") { open("configure") }.keyboardShortcut(",")
-        Divider()
-        Button("Quit Kairos") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
+        .padding(.vertical, 6)
+        .frame(width: 150)
+        .presentationBackground { VisualEffect() }
+    }
+
+    private func flyoutRow(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        HoverRow {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Image(systemName: icon).frame(width: iconColumn)
+                    Text(title); Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func flyoutBinding(_ id: Int64) -> Binding<Bool> {
+        Binding(get: { flyout == id }, set: { if !$0 && flyout == id { flyout = nil } })
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title).font(.caption).foregroundStyle(.tertiary)
+            .padding(.horizontal, 10).padding(.top, 3).padding(.bottom, 1)
+    }
+
+    private func actionRow(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        HoverRow(onHover: { if $0 { flyout = nil } }) {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Image(systemName: icon).frame(width: iconColumn)
+                    Text(title)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Row label: manual activities show their title. Auto activities show
+    /// `<source display name> - <suffix>`, where the suffix is the project if set,
+    /// else the command (e.g. a `pty` `ssh beth` → "Terminal - ssh beth").
+    private func rowLabel(_ a: ActivityRecord) -> String {
+        if a.manual { return a.title ?? a.project ?? "Activity" }
+        if let suffix = a.project ?? a.title, !suffix.isEmpty { return "\(a.displayName) - \(suffix)" }
+        return a.displayName
     }
 
     private func open(_ id: String) {
@@ -236,61 +443,52 @@ private struct MenuContent: View {
 
 struct ActivityView: View {
     let model: DaemonModel
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var newTitle = ""
     @State private var newProject: String?
     @State private var newClient: Int64?
+    @State private var afkImmune = false
     @State private var start = Date()
     @State private var ongoing = true
     @State private var end = Date()
 
     var body: some View {
-        Form {
-            Section("Active activities") {
-                if model.openActivities.isEmpty {
-                    Text("None").foregroundStyle(.secondary)
-                }
-                ForEach(model.openActivities, id: \.id) { activity in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(activity.title ?? activity.source)
-                            Text(activity.project ?? activity.source).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Close") { Task { await model.closeActivity(activity.id) } }
-                    }
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Title", text: $newTitle)
+            Picker("Project", selection: $newProject) {
+                Text("None").tag(String?.none)
+                ForEach(model.projects, id: \.self) { Text($0).tag(String?.some($0)) }
             }
-
-            Section("New activity") {
-                TextField("Title", text: $newTitle)
-                Picker("Project", selection: $newProject) {
-                    Text("None").tag(String?.none)
-                    ForEach(model.projects, id: \.self) { Text($0).tag(String?.some($0)) }
-                }
-                Picker("Client", selection: $newClient) {
-                    Text("None").tag(Int64?.none)
-                    ForEach(model.clients, id: \.id) { Text($0.name).tag(Int64?.some($0.id)) }
-                }
-                DatePicker("Start", selection: $start, displayedComponents: [.date, .hourAndMinute])
-                Toggle("Ongoing", isOn: $ongoing)
-                if !ongoing {
-                    DatePicker("End", selection: $end, in: start..., displayedComponents: [.date, .hourAndMinute])
-                }
+            Picker("Client", selection: $newClient) {
+                Text("None").tag(Int64?.none)
+                ForEach(model.clients, id: \.id) { Text($0.name).tag(Int64?.some($0.id)) }
+            }
+            Toggle("AFK detection off (passive work)", isOn: $afkImmune)
+            DatePicker("Start", selection: $start, displayedComponents: [.date, .hourAndMinute])
+            Toggle("Ongoing", isOn: $ongoing)
+            if !ongoing {
+                DatePicker("End", selection: $end, in: start..., displayedComponents: [.date, .hourAndMinute])
+            }
+            HStack {
+                Spacer()
                 Button("Start") {
                     let title = newTitle
                     let project = newProject
                     let client = newClient
+                    let immune = afkImmune
                     let startTs = start.timeIntervalSince1970
                     let endTs = ongoing ? nil : end.timeIntervalSince1970
-                    Task { await model.newActivity(source: "manual", title: title, project: project, clientId: client, start: startTs, end: endTs) }
-                    newTitle = ""; newProject = nil; newClient = nil
+                    Task { await model.startManualActivity(source: "manual", externalId: nil, title: title, project: project, clientId: client, afkImmune: immune, start: startTs, end: endTs) }
+                    newTitle = ""; newProject = nil; newClient = nil; afkImmune = false
                     ongoing = true; start = Date(); end = Date()
+                    dismissWindow(id: "activity")
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(newTitle.isEmpty || (!ongoing && end <= start))
             }
         }
-        .formStyle(.grouped)
-        .frame(minWidth: 440, minHeight: 320)
+        .padding(16)
+        .frame(width: 300)
         .onAppear { start = Date(); end = Date() }
         .task { await model.refresh() }
     }
@@ -368,5 +566,37 @@ struct ConfigView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 360)
         .task { await model.refresh() }
+    }
+}
+
+/// Posts native macOS notifications behind the `Dispatcher.notify` seam
+/// (`KairosServer` stays UI-free; this is the delivery side). Authorization is
+/// requested once at launch; if the user denies it, `post` is a silent no-op
+/// (the `NSLog` keeps a trace).
+enum Notifier {
+    static func requestAuth() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    static func post(title: String, subtitle: String?, body: String) {
+        NSLog("kairos: notify — %@", title)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        if let subtitle, !subtitle.isEmpty { content.subtitle = subtitle }
+        content.body = body
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req) { _ in }
+    }
+}
+
+/// Shows banners even while the daemon's process is frontmost (e.g. its menu
+/// popover is open). Held strongly by `AppDelegate` (the center keeps a weak ref).
+private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }

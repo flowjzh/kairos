@@ -4,7 +4,7 @@ public struct EmptyResult: Codable, Sendable, Equatable {
     public init() {}
 }
 
-public struct ActivitiesOpenResult: Codable, Sendable, Equatable {
+public struct ActivitiesStartResult: Codable, Sendable, Equatable {
     public let activityId: Int64
 
     public init(activityId: Int64) { self.activityId = activityId }
@@ -106,7 +106,7 @@ public struct SegmentsGetResult: Codable, Sendable, Equatable {
     }
 }
 
-public struct OwnerActivity: Codable, Sendable, Equatable {
+public struct FocusedActivity: Codable, Sendable, Equatable {
     public let source: String
     public let externalId: String?
     public let project: String?
@@ -120,8 +120,8 @@ public struct OwnerActivity: Codable, Sendable, Equatable {
     }
 }
 
-public struct OwnerGetResult: Codable, Sendable, Equatable {
-    public let activity: OwnerActivity?
+public struct FocusedGetResult: Codable, Sendable, Equatable {
+    public let activity: FocusedActivity?
 
-    public init(activity: OwnerActivity?) { self.activity = activity }
+    public init(activity: FocusedActivity?) { self.activity = activity }
 }

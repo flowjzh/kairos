@@ -8,7 +8,7 @@ Kairos separates **immutable, append-only truth** (reproducible via a watermark)
 
 - **Append-only + watermark:** `events` (what happened — activity bounds, overrides, afk, ai stops/submits, pauses) and `project_client_map` (how projects bill). Never updated/deleted; latest-by-`id` wins; a single `max(id)` watermark per table reproduces any point in time. This is the reproducibility primitive.
 - **Mutable identity (not watermarked):** `sources`, `projects`, `clients`. Each has a stable integer `id` (referenced everywhere via FK) and an editable display field (`display_name` / `name`). The `slug` (sources/projects) is the stable human-readable identifier. These are never hard-deleted (identity is permanent); display fields resolve live, so a rename surfaces even in old snapshots — accepted, because they are labels, not identity.
-- **Identity, created once:** `activities` (a unit of work context — an AI-agent session, a meeting, an ad-hoc task). Holds only stable identity/metadata; **all time-bearing and billing-bearing facts (bounds, client override) live in `events`, not here.**
+- **Identity, created once:** `activities` (a unit of work context — an AI-agent session, a wrapped `vim`/`ssh`, a meeting, an ad-hoc task). Holds stable identity/metadata plus a **mutable `state`** (lifecycle/visibility only). **All time-bearing facts live in `events`** (`focus`/`blur` + deductions), and the client override is an event — neither is stored here.
 - **Computed, never stored:** segments (attributed time) — derived on demand from `events` (see [04](./04-attribution.md)).
 
 ## Schema
@@ -17,8 +17,9 @@ Kairos separates **immutable, append-only truth** (reproducible via a watermark)
 -- Identity tables: mutable, NOT watermarked. id stable; display editable; never hard-deleted.
 CREATE TABLE sources (
   id           INTEGER PRIMARY KEY,
-  slug         TEXT NOT NULL UNIQUE,     -- 'claude-code' | 'cursor' | 'meeting' | 'manual' | 'idle' | ...
-  display_name TEXT NOT NULL             -- editable; defaults to slug
+  slug         TEXT NOT NULL UNIQUE,     -- 'claude-code' | 'cursor' | 'pty' | 'manual' | 'idle' | ...
+  display_name TEXT NOT NULL,            -- editable; defaults to slug
+  manual       INTEGER NOT NULL DEFAULT 0 -- 1 = a user-managed, backdrop-eligible source (seeded 1 for 'manual'; auto sources are 0)
 );
 
 CREATE TABLE projects (
@@ -33,8 +34,8 @@ CREATE TABLE clients (
   -- future: rate, currency (invoicing) — out of scope for v1
 );
 
--- A unit of work context: an AI-agent session, a meeting, an ad-hoc task.
--- Identity only — created once on activity_open; NO bounds, NO billing columns here.
+-- A unit of work context: an AI-agent session, a wrapped command (vim/ssh), a meeting, an ad-hoc task.
+-- Identity only. `state` is a mutable lifecycle/visibility flag (M4p3) — NOT time-bearing, NOT watermarked.
 CREATE TABLE activities (
   id           INTEGER PRIMARY KEY,
   source_id    INTEGER NOT NULL REFERENCES sources(id),   -- the agent/originator
@@ -42,6 +43,7 @@ CREATE TABLE activities (
   project_id   INTEGER REFERENCES projects(id),
   title        TEXT,
   metadata     TEXT,                                      -- JSON (transcript_path, cwd, ...)
+  state        INTEGER NOT NULL DEFAULT 0,                -- 0 active | 1 stopped | 2 archived (menu visibility; mutable; M4p3)
   UNIQUE (source_id, external_id)
 );
 
@@ -51,7 +53,7 @@ CREATE TABLE events (
   ts           REAL NOT NULL,                             -- epoch seconds (client-supplied; may be backdated)
   activity_id  INTEGER REFERENCES activities(id),         -- NULL for global events (afk, pause)
   source_id    INTEGER NOT NULL REFERENCES sources(id),   -- originator
-  kind         TEXT NOT NULL,                             -- see event kinds below
+  kind         INTEGER NOT NULL,                          -- event-kind code (see below); wire form is the slug
   payload      TEXT                                       -- JSON
 );
 
@@ -95,33 +97,31 @@ CREATE TRIGGER map_immutable_d BEFORE DELETE ON project_client_map BEGIN SELECT 
 
 | kind | activity_id | payload | meaning |
 |---|---|---|---|
-| `activity_open` | set | — | activity starts (open bound); title/project/metadata live on the immutable `activities` row |
-| `activity_close` | set | — | activity ends (close bound) |
+| `focus` / `blur` | set | — | the activity gained / lost focus — **the sole timing base** (M4p3). Emitted by the PTY wrapper (DECSET-1004), a manual menu click, or the daemon's auto-catch |
+| `ai_stop` | set | — | an AI agent finished its turn (start of a *deduction* marker) |
+| `ai_submit` | set | — | user submitted a prompt to an AI agent (end of the `[ai_submit, ai_stop]` grind deduction) |
 | `activity_override` | set | `{client_id?, billable?}` | set/replace the activity's direct client (latest by id wins; `client_id:null` = clear) |
-| `ai_stop` | set | — | an AI agent finished its turn |
-| `ai_submit` | set | — | user submitted a prompt to an AI agent |
-| `focus` / `blur` | set | — | the terminal gained / lost focus (M4; via the `kairos` PTY wrapper) |
-| `afk_on` | NULL | `{reason}` | user went away; `reason` = `idle` \| `sleep` \| `offline` |
-| `afk_off` | NULL | `{reason?}` | user returned |
+| `afk_on` | NULL | `{reason}` | user went away; `reason` = integer code `0` idle \| `1` sleep \| `2` offline |
+| `afk_off` | NULL | — | user returned |
 | `pause_on` / `pause_off` | NULL | — | manual global pause |
-| `force_owner` | set | — | assert this activity owns the current gap |
 
-`ai_stop`/`ai_submit` are **agent-agnostic** — which agent (Claude Code, Cursor, …) is identified by `source_id` → `sources.slug` (e.g. `claude-code`). The attribution strategy is inferred from the event *signature* (an activity with `ai_submit` events → ai submit-anchored; else explicit-bounds), **not** keyed by source — so adding a new AI agent requires no code change (see [04](./04-attribution.md)). `afk_on` `reason`: `idle` (idle timeout, machine on), `sleep` (system sleep / lid close), `offline` (machine off / daemon-down gap). `focus`/`blur` are holing signals (M4; generic — any future focus reporter); they don't affect strategy inference and are recorded for later focus-based holing of ai windows.
+Since **M4p3** `kind` and `activities.state` are stored as compact **integer codes** (the closed, code-defined vocabulary is efficient for a future client↔server scale), while the **wire/CLI form stays a human-readable slug** (`{"kind":"ai_submit"}`, `--kind ai_submit`) — the same wire-slug ↔ stored-id split as sources/projects. Timing is a pure function of `focus`/`blur` (base) minus `ai_*` (per-activity grind), `afk`, and `pause` (see [04](./04-attribution.md)). The former `activity_open` / `activity_close` / `force_owner` kinds are **removed**: activity lifecycle is the mutable `activities.state` column (not an event), and a manual `focus` replaces `force_owner`. `ai_stop`/`ai_submit` stay **agent-agnostic** — which agent is identified by `source_id` → `sources.slug`, never keyed on by attribution. `afk_on` `reason` is likewise a compact **integer code** (`0` idle — idle timeout, machine on; `1` sleep — system sleep / lid close; `2` offline — machine off / daemon-down gap), with a slug display form. `focus`/`blur` are generic — any focus reporter can emit them.
 
-## Activity bounds & client override — both event-sourced
+## Activity time, lifecycle & client override
 
-An activity's time bounds and its direct client override are **not columns on `activities`** — they are events, so they are watermarked and reproducible:
+Since **M4p3** an activity carries three orthogonal things, kept separate:
 
-- **Bounds:** `activity_open` (ts = start) and `activity_close` (ts = end). The ai strategy uses `[activity_open | ai_stop, ai_submit]` windows; explicit-bounds uses `[activity_open, activity_close]` (see [04](./04-attribution.md)).
-- **Client override:** `activity_override` events; latest by `id` for the activity wins (`client_id:null` = tombstone). Meetings/manual set this directly; ai sessions never set it (they use the map).
+- **Time (event-sourced):** derived entirely from `focus`/`blur` events minus deductions (`ai_*`, `afk`, `pause`) — see [04](./04-attribution.md). There are no `activity_open`/`activity_close` bounds anymore.
+- **Lifecycle (mutable column, not watermarked):** `activities.state` ∈ `{active, stopped, archived}` drives menu visibility only — `active` shows in the live switch list, `stopped` shows in *Start Activity …* (manual only, reactivatable), `archived` (manual only) is hidden. Set by `activities.start` (→ `active`, create-or-resume) and `activities.stop` (→ `stopped`); never read by attribution, so it is deliberately *not* an event.
+- **Client override (event-sourced):** `activity_override` events; latest by `id` for the activity wins (`client_id:null` = tombstone). Meetings/manual set this; ai sessions use the project→client map.
 
-Storing the override as an event (rather than a third append-only table) keeps the reproducibility primitive to **two watermarks** (`events`, `project_client_map`) — bounds and override are both covered by the `events` watermark.
+Keeping the override as an event (not a column) keeps the reproducibility primitive to **two watermarks** (`events`, `project_client_map`). `state` is intentionally outside that primitive — it is display state (like a `display_name`), not a time-bearing fact.
 
 ## Identity tables: sources, projects, clients
 
 All three follow the same pattern: stable integer `id` (the FK target everywhere), editable display field, never hard-deleted. They are **not watermarked** — identity is pinned by the stable `id` referenced from the append-only tables; the display field resolves live.
 
-- **`sources`** — the originator of events (`claude-code`, `cursor`, `meeting`, `manual`, `idle`, …). The daemon **auto-registers** a source by slug on first sight (upsert into `sources`), so adding a new AI agent is pure data — no code, no schema change.
+- **`sources`** — the originator of events (`claude-code`, `cursor`, `pty`, `manual`, `idle`, …). The daemon **auto-registers** a source by slug on first sight (upsert into `sources`), so adding a new AI agent is pure data — no code, no schema change. The `manual` flag (seeded `1` for `manual`) marks **user-managed, backdrop-eligible** sources; the wrapped-command source `pty` and agent sources are `auto` (`manual = 0`). See [04](./04-attribution.md).
 - **`projects`** — `slug` = cwd basename (ai sessions) or topic (meetings); `display_name` editable. Auto-registered by slug on first sight.
 - **`clients`** — user-created; `name` editable.
 
