@@ -28,7 +28,7 @@ __pycache__/
 .pytest_cache/
 uv.lock
 
-# Rust (rust/kairos-pty) — Cargo.lock is committed (binary crate)
+# Rust (root Cargo workspace) — Cargo.lock is committed (binary crates)
 target/
 
 # Editor

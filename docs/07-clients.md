@@ -6,7 +6,7 @@ This is the extension model: **new sources = new external clients speaking the p
 
 ## `kairos-claude-code` — Claude Code plugin
 
-Registered as a Claude Code plugin (`plugins/claude-code/`): a `.claude-plugin/plugin.json` plus a `hooks/hooks.json` that wires the four lifecycle hooks to one small **native binary** (`kairos-claude-code`). The binary reads the hook JSON from stdin, maps it to a generic RPC, and writes the socket directly (reusing the shared `KairosClient` transport + spool) — no `jq`/`python` spawn, no shelling to the `kairos` CLI. It always exits 0. Fire-and-forget: Claude hooks must never block, and the spool fallback covers a down daemon.
+Registered as a Claude Code plugin (`plugins/claude-code/`): a `.claude-plugin/plugin.json` plus a `hooks/hooks.json` that wires the four lifecycle hooks to one small **native binary** (`kairos-claude-code`). The binary reads the hook JSON from stdin, maps it to a generic RPC, and writes the socket directly (reusing the shared Rust `kairos-client` transport + spool) — no `jq`/`python` spawn, no shelling to the `kairos` CLI. It always exits 0. (M4p2: the binary is Rust.) Fire-and-forget: Claude hooks must never block, and the spool fallback covers a down daemon.
 
 Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd basename`, …) in the plugin's own binary is deliberate: the `kairos` CLI stays **agent-agnostic** (ADR 12/20). A different agent ships its own binary with its own mapping.
 
@@ -23,7 +23,7 @@ Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd bas
 
 The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly what the daemon needs (no window/title introspection, hence no Accessibility). The claude-code client reports **only `project`** (the cwd basename); it never needs to know the billing client — that is resolved later via the project→client mapping.
 
-**Under `kairos-pty` (M4).** When Claude is launched as `kairos-pty claude`, the wrapper sets `KAIROS_SESSION_ID` in the environment; the hook binary reads it and adds `kairos_session_id` to **every** RPC above. The daemon uses it to keep an ephemeral `kairos_session_id → (source, external_id)` map fresh, so it can attribute the wrapper's `focus.report` transitions to this session as `ai_focus`/`ai_blur` (see [05](./05-protocol.md), [09](./09-roadmap.md)). Unwrapped sessions simply omit the field and behave exactly as before.
+**Under `kairos` (M4p2).** When Claude is launched as `kairos claude` (the PTY fallback — any non-subcommand on `PATH` is wrapped), the wrapper sets `KAIROS_SESSION_ID` in the environment; the hook binary reads it and adds `kairos_session_id` to **every** RPC above. The daemon uses it to keep an ephemeral `kairos_session_id → (source, external_id)` map fresh, so it can attribute the wrapper's `focus.report` transitions to this session as `focus`/`blur` (see [05](./05-protocol.md), [09](./09-roadmap.md)). Unwrapped sessions simply omit the field and behave exactly as before.
 
 ### Responsibilities & non-responsibilities
 

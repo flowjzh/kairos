@@ -1,0 +1,19 @@
+[package]
+name = "kairos"
+version.workspace = true
+edition.workspace = true
+description = "Kairos CLI + transparent PTY wrapper (fallback dispatch)"
+
+[[bin]]
+name = "kairos"
+path = "src/main.rs"
+
+[dependencies]
+kairos-codec = { path = "../libs/codec" }
+kairos-client = { path = "../libs/client" }
+serde_json = "1"
+portable-pty = "0.8"
+signal-hook = "0.3"
+crossterm = { version = "0.28", default-features = false }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

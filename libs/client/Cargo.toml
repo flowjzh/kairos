@@ -1,0 +1,12 @@
+[package]
+name = "kairos-client"
+version.workspace = true
+edition.workspace = true
+description = "Kairos socket client + spool fallback (shared by the CLI and agent plugins)"
+
+[dependencies]
+kairos-codec = { path = "../codec" }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+kairos-codec = { path = "../codec" }

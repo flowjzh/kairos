@@ -20,7 +20,7 @@ The daemon is usable for non-AI timesheets before any Claude integration exists.
 
 *Implemented* (attribution + reducer + plugin + read-path hardening); multi-session verification against real Claude work is the remaining exit check.
 
-- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) — a small native binary (`KairosClaudeCode` mapping + shared `KairosClient` transport) that maps hook JSON to generic RPCs and speaks the socket directly (spool fallback), keeping the `kairos` CLI agent-agnostic.
+- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) — a small native binary (the hook→RPC mapping + shared `kairos-client` transport; Rust as of M4p2) that maps hook JSON to generic RPCs and speaks the socket directly (spool fallback), keeping the `kairos` CLI agent-agnostic.
 - **AI submit-anchored** strategy in the registry: closed `[activity_open | ai_stop, ai_submit]` windows, resolved by submit-priority (nesting); open tails not counted; AI-execution excluded; afk/pause hole the windows (with the afk-submit-break); explicit-vs-ai holing.
 - AI-agent projects auto-appear; tag each to a client once in the config window.
 - Multi-session verification (several Ghostty splits); `force_owner` exercised.
@@ -48,26 +48,55 @@ Multi-session over-count (docs/01): the submit-anchored "thinking" window
 aren't looking at. This milestone adds a **focus** signal to hole those windows,
 obtained **permissionlessly** (no Accessibility) via in-band terminal focus reports.
 
-- **`kairos-pty` (Rust) — a transparent PTY wrapper.** Launch Claude as
-  `kairos-pty claude`; it runs Claude on a pty, injects `KAIROS_SESSION_ID`, and
-  copies bytes both ways unchanged. Claude enables DECSET **1004** focus reporting
-  itself, so the terminal emits `ESC[I`/`ESC[O` on focus/blur; the wrapper taps
-  those (observe-only) and reports each to the daemon via `focus.report`
-  (best-effort — dropped if the socket is down).
+- **A transparent PTY wrapper, folded into `kairos` (M4p2).** Launch Claude as
+  `kairos claude` (fallback dispatch — any non-subcommand on `PATH` is wrapped); it
+  runs Claude on a pty, injects `KAIROS_SESSION_ID`, and copies bytes both ways
+  unchanged. Claude enables DECSET **1004** focus reporting itself, so the terminal
+  emits `ESC[I`/`ESC[O` on focus/blur; the wrapper taps those (observe-only) and
+  reports each to the daemon via `focus.report` (best-effort — dropped if the socket
+  is down).
 - **Self-healing session map.** Every Claude hook RPC also carries
   `KAIROS_SESSION_ID`, so the daemon holds an in-memory
   `KAIROS_SESSION_ID → (source, external_id)` map. A focus report resolves through
-  it to the activity, and the daemon appends `ai_focus`/`ai_blur` to the
+  it to the activity, and the daemon appends `focus`/`blur` to the
   append-only log (reproducible, like afk). The map is ephemeral — a daemon
   restart is repaired by the next hook.
 - **Attribution is unchanged in this milestone**: the focus events land in the
   log, inert (the reducer/strategies ignore them), ready to hole the ai windows.
   *How* focus holes the windows — and a possible Rust port of the daemon — are
   follow-up design steps, not part of this milestone.
-- **Exit criteria:** several `kairos-pty claude` splits; switching focus lands
-  `ai_focus`/`ai_blur` on the correct session in the log, the TUI is visually
+- **Exit criteria:** several `kairos claude` splits; switching focus lands
+  `focus`/`blur` on the correct session in the log, the TUI is visually
   unaffected, and focus during a daemon outage is dropped and recovered on the
   next hook.
+
+### M4p2 — Rust clients + canonical wire + monorepo
+
+The CLI, PTY wrapper, and Claude Code hook binary move from Swift to **Rust**;
+the daemon (attribution/SQLite/UI) stays Swift. Rust `libs/codec` becomes the
+**canonical** wire definition, with the Swift `KairosRPC` a hand-written
+`Codable` mirror (no codegen — the daemonclaw pattern; the wire format is
+unchanged). The PTY folds into a single `kairos` binary with **fallback
+dispatch** (`kairos claude` Just Works; `kairos pty claude` explicit; a typo or
+non-executable → clear error + suggestion). The repo becomes a monorepo:
+`daemon/mac/` (Swift package) + a root Cargo workspace (`libs/codec`,
+`libs/client`, `cli`, `plugins/claude-code`). `ai_focus`/`ai_blur` are renamed to
+generic **`focus`/`blur`** (any future focus reporter can emit them). Dead Swift
+targets (`KairosCLI`/`KairosClient`/`KairosClaudeCode` + the two executables) are
+deleted; their tests move to Rust.
+
+- **Exit criteria:** `cargo test` + `swift test` green; `make install` ships one
+  `kairos` binary; live `kairos client list` / `kairos claude` against the running
+  Swift daemon; the Claude plugin (Rust) reinstall reports focus as before.
+
+### M4p3 — focus-holing + PTY-owned activities (planned)
+
+Focus/blur are still inert. This milestone wires the algorithm (human-time ≈
+`(focus/blur) ∩ (ai_stop/ai_submit)`; vim-style commands with no ai events
+degrade to focus/blur only) and lands **Design B**: the PTY owns the activity
+(`external_id = KAIROS_SESSION_ID`), and agent hooks **enrich** it by kid instead
+of opening a competing `external_id=claude_sid` activity — so focus/blur and
+ai_stop/ai_submit land on one activity. Adds `--activity`. Out of M4p2.
 
 ## M5 — Polish & open source
 
@@ -107,7 +136,7 @@ Deferred from M3: segments compute on demand and are already reproducible from t
 6. **Snapshot = recipe (params + per-source watermarks + digest), not stored segments** — smaller, cannot drift, immutable, auditable. `snapshot create` drains the spool first; late-arriving-in-range events are excluded by design ("frozen at submission").
 7. **`project → client` billing is a resolved-at-read mapping, not a field on activities** — ai sessions report only `project` (auto), the client is tagged once and applies retroactively; meetings/manual set a direct client via an `activity_override` event (watermarked, not a mutable column).
 8. **`clients` is a mutable identity table (id stable, name editable), not watermarked** — names are cosmetic labels; identity is pinned via the map/override watermarks.
-9. **Ownership is intent-based** (submit / explicit start), never window-focus — this is what stays true regardless of which window is focused, and it eliminates the Accessibility dependency. Focus is not discarded, though: **M4** reintroduces it as a *holing* signal (blur removes over-counted "thinking" time across parallel sessions), obtained **permissionlessly in-band** via the terminal's DECSET-1004 focus reports through the `kairos-pty` wrapper — so ownership and focus are separate concerns and neither needs Accessibility. (Refined in M4; this ADR originally rejected focus outright.)
+9. **Ownership is intent-based** (submit / explicit start), never window-focus — this is what stays true regardless of which window is focused, and it eliminates the Accessibility dependency. Focus is not discarded, though: **M4** reintroduces it as a *holing* signal (blur removes over-counted "thinking" time across parallel sessions), obtained **permissionlessly in-band** via the terminal's DECSET-1004 focus reports through the `kairos` PTY wrapper (M4p2's fallback dispatch) — so ownership and focus are separate concerns and neither needs Accessibility. (Refined in M4; this ADR originally rejected focus outright.)
 10. **Zero special permissions** as a hard constraint.
 11. **Output lives in external consumers** — the core exposes a segments API and does not format or deliver timesheets.
 12. **Extension by protocol, not in-process plugins** — new sources and outputs are external processes speaking the socket/CLI.
@@ -120,5 +149,8 @@ Deferred from M3: segments compute on demand and are already reproducible from t
 19. **`sources`, `projects`, `clients` are mutable identity tables** `(id PK, slug UNIQUE, display_name)` (clients: `id, name`), referenced by integer FK everywhere, never hard-deleted, **not watermarked** — identity is pinned by the stable id referenced from the append-only tables; display resolves live. The daemon auto-registers sources/projects by slug on first sight, so adding a new AI agent is pure data.
 20. **Event kinds are agent-agnostic (`ai_stop`/`ai_submit`); strategy is inferred from the event signature, not the source.** An activity with `ai_submit` events → ai submit-anchored; else explicit-bounds. The registry is keyed by strategy-name + `attribution_version`, so a new agent (which emits `ai_*` events) needs no code change — only a genuinely new strategy kind does.
 21. **Unified afk/pause/owner state behind one `KairosCore` reducer (M2).** Three derivations answer "am I afk/paused? who owns the current gap?" — previously independent (`GlobalSpans` paired on/off, `OwnerPredictor` released only on `activity_close`, the menu `DaemonModel` was last-write-wins) and they could drift (the owner-after-pause bug was a symptom). A single `GlobalState` reducer now consumes the event log once and exposes afk/pause spans, the current owner, and open activities; `GlobalSpans`, `OwnerPredictor`, and the menu all read from it. Landed in M2 because the `ai_stop` owner transition touches the same model. Deferred from M1, where the on/off stream is canonical and the three agreed.
-22. **`kairos-pty` is a transparent PTY wrapper, not an in-daemon focus watcher (M4).** Terminal focus (DECSET 1004) is reported in-band on the pty byte stream, so a thin external wrapper taps it (`ESC[I`/`ESC[O`, observe-only, forwarding every byte unchanged) with zero special permissions — the daemon never introspects windows or terminals. The wrapper injects `KAIROS_SESSION_ID`; the Claude hook joins it to the session's `external_id`. Extension-by-protocol (ADR 12): a new source of focus is an external process speaking the socket, not daemon code.
-23. **The `KAIROS_SESSION_ID → external_id` map is ephemeral in-memory soft state, self-healed by every hook (M4).** A `KAIROS_SESSION_ID` is meaningful only while its wrapper lives, so the map is never persisted or searched over history; each hook RPC re-registers it (last-write-wins), so a daemon restart is repaired by the next hook — worst case, focus is lost only in that gap. A focus report that arrives before the first hook is buffered (latest wins) and flushed on registration. `ai_focus`/`ai_blur` are appended to the log (like afk) so focus-holed segments stay reproducible; a report that can't be resolved is dropped (best-effort — focus is live telemetry, and a stale replay is worse than a gap).
+22. **The PTY wrapper is `kairos`'s fallback dispatch, not a standalone binary (M4→M4p2).** Terminal focus (DECSET 1004) is reported in-band on the pty byte stream, so the wrapper taps it (`ESC[I`/`ESC[O`, observe-only, forwarding every byte unchanged) with zero special permissions — the daemon never introspects windows or terminals. `kairos <cmd>` runs any non-subcommand command under a pty and injects `KAIROS_SESSION_ID`; the agent hook joins it to the session's `external_id`. (M4p1 shipped a standalone `kairos-pty`; M4p2 folded it into `kairos`.) Extension-by-protocol (ADR 12): a new source of focus is an external process speaking the socket, not daemon code.
+23. **The `KAIROS_SESSION_ID → external_id` map is ephemeral in-memory soft state, self-healed by every hook (M4).** A `KAIROS_SESSION_ID` is meaningful only while its wrapper lives, so the map is never persisted or searched over history; each hook RPC re-registers it (last-write-wins), so a daemon restart is repaired by the next hook — worst case, focus is lost only in that gap. A focus report that arrives before the first hook is buffered (latest wins) and flushed on registration. `focus`/`blur` (renamed from `ai_focus`/`ai_blur` in M4p2 — generic, any focus reporter can emit them) are appended to the log (like afk) so focus-holed segments stay reproducible; a report that can't be resolved is dropped (best-effort — focus is live telemetry, and a stale replay is worse than a gap).
+24. **Rust `libs/codec` is the canonical wire definition; the Swift daemon's `KairosRPC` is a hand-written `Codable` mirror (M4p2).** No codegen — the daemonclaw pattern (Rust canonical, Swift hand-mirrors, kept byte-stable by discipline + tests; "codegen later"). The wire format is unchanged; only the canonical source moved to Rust, since three of the four speakers (CLI, PTY, hook) are now Rust. Wire fidelity is gated by ported unit tests + live e2e against the Swift daemon.
+25. **Monorepo layout: `daemon/mac/` (the Swift package, own `Package.swift`) + a root Cargo workspace (`libs/codec`, `libs/client`, `cli`, `plugins/claude-code`) (M4p2).** Native build systems are per-component and path-referenced (SwiftPM under `daemon/mac`, Cargo at root), matching the daemonclaw topology. The daemon's `Support/` (Info.plist, launchd plist) stays at the repo root, referenced by the Makefile.
+26. **Clients (CLI, PTY wrapper, Claude Code hook) are Rust; the daemon (attribution, store, menu-bar UI) stays Swift (M4p2).** The boundary is the wire protocol — everything crossing it is line-JSON, so the language split is invisible to callers. The high-frequency hook binary is a separate lean crate (codec + client only); the `kairos` CLI merges the PTY in-process (static link, ~950 KB — negligible; the one place leanness matters stays lean). A future full daemon→Rust port is unconstrained by this split.

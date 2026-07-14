@@ -34,12 +34,12 @@ activities.close   { source, external_id?, ts, kairos_session_id? }
 events.post        { activity: {source, external_id}, kind, ts, payload?, kairos_session_id? }
                    → {}                               # appended; fire-and-forget
 focus.report       { kairos_session_id, focused: bool, ts }
-                   → {}                               # → ai_focus / ai_blur (M4)
+                   → {}                               # → focus / blur (M4; generic)
 ```
 
 `source` and `project` are slugs — the daemon auto-registers them (upsert into `sources`/`projects`) on first sight, so a new agent/project needs no prior setup. `activities.open` creates the identity row (see [03](./03-data-model.md)) and emits `activity_open`; `activities.close` emits `activity_close`. A meeting/manual with a direct client follows `activities.open` with `events.post` `kind=activity_override`. `events.post` is activity-scoped (it requires an activity); global events are written by the daemon itself — afk by the idle sampler directly to the store, and pause via `control.pause`.
 
-**`kairos_session_id` + `focus.report` (M4).** When Claude is launched under the `kairos-pty` wrapper, every hook RPC carries the wrapper's `kairos_session_id`; the daemon keeps an ephemeral in-memory map `kairos_session_id → (source, external_id)`, refreshed on each hook (last-write-wins), so it survives a daemon restart via the next hook. The wrapper reports terminal focus transitions with `focus.report` (best-effort — dropped if the socket is down); the daemon resolves the map to the activity and appends `ai_focus` (focus-in) or `ai_blur` (focus-out). A report that arrives before the mapping exists is buffered (latest wins) and flushed on registration; one that can't be resolved is dropped.
+**`kairos_session_id` + `focus.report` (M4).** When Claude is launched under `kairos` (the PTY fallback), every hook RPC carries the wrapper's `kairos_session_id`; the daemon keeps an ephemeral in-memory map `kairos_session_id → (source, external_id)`, refreshed on each hook (last-write-wins), so it survives a daemon restart via the next hook. The wrapper reports terminal focus transitions with `focus.report` (best-effort — dropped if the socket is down); the daemon resolves the map to the activity and appends `focus` (focus-in) or `blur` (focus-out). A report that arrives before the mapping exists is buffered (latest wins) and flushed on registration; one that can't be resolved is dropped. The wire format is defined canonically in Rust `libs/codec`; the daemon's `KairosRPC` is its Swift hand-mirror (M4p2).
 
 ### Control (config UI / menu bar / CLI)
 
