@@ -46,6 +46,14 @@ struct GlobalStateTests {
     }
 
     @Test
+    func futureFocusLightsUpOnlyAtItsTime() {
+        // A meeting scheduled for ts=200 must not focus at now=100; at 200 it does.
+        let events = [ev(1, 200, 7, .focus)]
+        #expect(GlobalState.reduce(events: events, to: 100).focused == nil)
+        #expect(GlobalState.reduce(events: events, to: 200).focused == 7)
+    }
+
+    @Test
     func aiEventsDoNotChangeFocus() {
         // Only focus/blur move the pointer; ai_submit/ai_stop are deductions.
         let events = [ev(1, 0, 1, .focus), ev(2, 10, 1, .aiSubmit), ev(3, 20, 1, .aiStop)]

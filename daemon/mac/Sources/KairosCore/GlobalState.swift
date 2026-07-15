@@ -4,8 +4,10 @@ import Foundation
 /// pause spans and the **focused** activity — the derivations the menu and the
 /// attribution deductions read. Since M4p3 the focus pointer replaces the old
 /// "owner": `focus` moves it (latest wins), `blur` clears it *only if it targets
-/// the current holder* (so a stale/out-of-order blur is a no-op). afk and pause
-/// are independent spans and do not change the focused activity.
+/// the current holder* (so a stale/out-of-order blur is a no-op). A focus/blur
+/// dated after `to` is ignored — the pointer reflects state *as of* `to`, so a
+/// meeting scheduled for a future start lights up only when its time arrives.
+/// afk and pause are independent spans and do not change the focused activity.
 ///
 /// The active-activity *set* is no longer derived here — it is the mutable
 /// `activities.state` column, read from the store (ADR 29).
@@ -34,9 +36,11 @@ public struct GlobalState: Sendable, Equatable {
             case .pauseOff:
                 if let start = pauseStart { pause.append(Interval(start: start, end: event.ts)); pauseStart = nil }
             case .focus:
-                focused = event.activityId
+                // Ignore a focus scheduled after `to` (e.g. a meeting created with
+                // a future start): the pointer lights only once its time arrives.
+                if event.ts <= to { focused = event.activityId }
             case .blur:
-                if focused == event.activityId { focused = nil }
+                if event.ts <= to, focused == event.activityId { focused = nil }
             default:
                 break
             }

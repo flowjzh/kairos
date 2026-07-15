@@ -17,6 +17,10 @@ private func menuBarIcon(afk: Bool) -> NSImage {
     return image
 }
 
+/// Floor an epoch-seconds timestamp to the whole minute (drops sub-minute
+/// residue, e.g. the stale seconds a minute-granularity `DatePicker` carries).
+private func floorToMinute(_ ts: Double) -> Double { floor(ts / 60) * 60 }
+
 @main
 struct KairosApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -135,6 +139,7 @@ final class DaemonModel {
     private(set) var isAfk = false
     private(set) var focusedId: Int64?
     private(set) var activeActivities: [ActivityRecord] = []
+    private(set) var upcomingActivities: [ScheduledActivity] = []
     private(set) var manualTasks: [ActivityRecord] = []
     private(set) var clients: [Client] = []
     private(set) var mappings: [ProjectMapping] = []
@@ -142,12 +147,21 @@ final class DaemonModel {
     private var kairosSourceId: Int64 = 0
     private var refreshTimer: Timer?
     private var refreshTask: Task<Void, Never>?
+    /// Focus at the previous refresh — to detect a scheduled activity taking
+    /// over the pointer as its start time arrives (issue 2).
+    private var previousFocusedId: Int64?
+    /// Max id of any `focus` event seen last refresh — if focus moved but no new
+    /// focus event was written, the move is time-driven (a scheduled start
+    /// crossing), not a user/click or auto-catch (both write a focus).
+    private var lastFocusEventId: Int64 = 0
+    private let notify: @Sendable (NotificationContent) -> Void
 
-    init(store: Store) {
+    init(store: Store, notify: @escaping @Sendable (NotificationContent) -> Void = Notifier.deliver) {
         self.store = store
         let sessions = SessionRegistry()
         self.sessions = sessions
-        self.dispatcher = Dispatcher(sessions: sessions) { c in Notifier.post(title: c.title, subtitle: c.subtitle, body: c.message) }
+        self.notify = notify
+        self.dispatcher = Dispatcher(sessions: sessions, notify: Notifier.deliver)
     }
 
     func startRefresh() {
@@ -173,8 +187,9 @@ final class DaemonModel {
         if kairosSourceId == 0 {
             kairosSourceId = (try? await store.resolveSource(slug: DaemonSources.control)) ?? 0
         }
+        let now = Date().timeIntervalSince1970
         let events = (try? await store.loadGlobalEvents()) ?? []
-        let state = GlobalState.reduce(events: events, to: Date().timeIntervalSince1970)
+        let state = GlobalState.reduce(events: events, to: now)
         let focused = state.focused
 
         isPaused = state.isPaused
@@ -191,11 +206,35 @@ final class DaemonModel {
             menuLabel = "Kairos"
         }
 
-        activeActivities = (try? await store.activeActivities()) ?? []
-        manualTasks = (try? await store.recentStoppedManualActivities()) ?? []
+        // Section placement is time-derived (not the mutable `state` column), so a
+        // timed meeting stored `stopped` at creation still lands correctly:
+        // Upcoming (start ahead) / Active (running) / Recent (ended). See tests.
+        let (active, upcoming, recent) = ActivityBuckets.partition(
+            active: (try? await store.activeActivities()) ?? [],
+            stopped: (try? await store.recentStoppedManualActivities()) ?? [],
+            events: events,
+            now: now
+        )
+        activeActivities = active
+        upcomingActivities = upcoming
+        manualTasks = recent
         clients = (try? await store.listClients()) ?? []
         mappings = (try? await store.listMapping()) ?? []
         projects = (try? await store.listProjects()) ?? []
+
+        // A scheduled activity's start crossing `now` makes the reducer hand it
+        // the pointer with NO new event written. Detect that — focus moved to a
+        // different activity, yet no focus event arrived since last refresh — and
+        // tell the user we auto-switched to the planned task (issue 2).
+        let maxFocusId = events.lazy.filter { $0.kind == .focus }.map(\.id).max() ?? 0
+        if let focused, let prev = previousFocusedId, focused != prev, maxFocusId == lastFocusEventId {
+            // The just-started activity is in `active` by construction; fall back
+            // to a generic label rather than a store round-trip.
+            let title = active.first { $0.id == focused }?.title ?? "an activity"
+            notify(NotificationContent(title: "Kairos", message: "Scheduled activity \"\(title)\" started — switched focus to it."))
+        }
+        previousFocusedId = focused
+        lastFocusEventId = maxFocusId
     }
 
     func togglePause() async {
@@ -260,6 +299,16 @@ final class DaemonModel {
         await refresh()
     }
 
+    /// Cancel an upcoming (not-yet-started) activity: neutralise its scheduled
+    /// `focus` with a `blur` at the same instant (ordered after it, so it never
+    /// lights up) and archive the row so it leaves every list.
+    func cancelUpcoming(_ id: Int64, start: Double) async {
+        try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: start)
+        try? await store.setActivityState(activityId: id, .archived)
+        await sessions.setAfkImmune(id, false)
+        await refresh()
+    }
+
     /// Archive a manual activity: `blur` (no-op if not focused) + state=archived
     /// — hidden from every list.
     func archiveActivity(_ id: Int64) async {
@@ -315,11 +364,14 @@ private struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             if !model.activeActivities.isEmpty {
-                sectionLabel("Active Activities")
+                sectionLabel("Ongoing Activities")
                 ForEach(model.activeActivities, id: \.id) { a in
                     HoverRow(onHover: { if $0 { flyout = nil } }) {
                         HStack(spacing: 8) {
-                            // Left dot: green = focused, gray = not. Click the row to focus.
+                            // Left dot: green = focused, gray = not. Click to
+                            // focus this activity — move the single pointer here.
+                            // (No un-focus: the pointer moves by focusing another,
+                            // or a manual one is removed with ✕.)
                             Button { Task { await model.focusActivity(a.id) } } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: "circle.fill")
@@ -349,12 +401,40 @@ private struct MenuContent: View {
                 Divider().padding(.vertical, 3)
             }
 
+            if !model.upcomingActivities.isEmpty {
+                sectionLabel("Upcoming Activities")
+                ForEach(model.upcomingActivities) { u in
+                    HoverRow(onHover: { if $0 { flyout = nil } }) {
+                        HStack(spacing: 8) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: iconColumn)
+                                Text(u.record.title ?? "Activity").lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(scheduleLabel(u.start)).font(.caption).foregroundStyle(.tertiary)
+                            }
+                            Button { Task { await model.cancelUpcoming(u.id, start: u.start) } } label: {
+                                Image(systemName: "xmark").font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Cancel")
+                        }
+                    }
+                }
+                Divider().padding(.vertical, 3)
+            }
+
             if !model.manualTasks.isEmpty {
                 sectionLabel("Recent Activities")
                 ForEach(model.manualTasks, id: \.id) { t in
                     HoverRow(onHover: { if $0 { flyout = t.id } }) {
                         HStack(spacing: 5) {
-                            Color.clear.frame(width: iconColumn, height: 1)   // align text with icon rows
+                            Image(systemName: "checkmark.circle")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .frame(width: iconColumn)
                             Text(t.title ?? "Activity").lineLimit(1)
                             Spacer(minLength: 4)
                             Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
@@ -385,7 +465,7 @@ private struct MenuContent: View {
     // menu) so icons render and the material/position match the main menu.
     @ViewBuilder private func flyoutMenu(_ t: ActivityRecord) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            flyoutRow("Start", "arrowtriangle.right.fill") {
+            flyoutRow("Resume", "arrowtriangle.right.fill") {
                 flyout = nil; Task { await model.reactivate(t.id) }
             }
             flyoutRow("Archive", "arrow.down.to.line") {
@@ -417,6 +497,15 @@ private struct MenuContent: View {
     private func sectionLabel(_ title: String) -> some View {
         Text(title).font(.caption).foregroundStyle(.tertiary)
             .padding(.horizontal, 10).padding(.top, 3).padding(.bottom, 1)
+    }
+
+    /// An upcoming activity's start: just the time if today, else short date + time.
+    private func scheduleLabel(_ ts: Double) -> String {
+        let date = Date(timeIntervalSince1970: ts)
+        let time = date.formatted(date: .omitted, time: .shortened)
+        return Calendar.current.isDateInToday(date)
+            ? time
+            : date.formatted(.dateTime.month(.abbreviated).day()) + " " + time
     }
 
     private func actionRow(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
@@ -483,8 +572,11 @@ struct ActivityView: View {
                     let project = newProject
                     let client = newClient
                     let immune = afkImmune
-                    let startTs = start.timeIntervalSince1970
-                    let endTs = ongoing ? nil : end.timeIntervalSince1970
+                    // The Start/End pickers expose only date + hour:minute, so their
+                    // seconds are stale residue from the picker's initial `Date()`.
+                    // Floor at this input boundary so the recorded start is minute-aligned.
+                    let startTs = floorToMinute(start.timeIntervalSince1970)
+                    let endTs = ongoing ? nil : floorToMinute(end.timeIntervalSince1970)
                     Task { await model.startManualActivity(source: "manual", externalId: nil, title: title, project: project, clientId: client, afkImmune: immune, start: startTs, end: endTs) }
                     newTitle = ""; newProject = nil; newClient = nil; afkImmune = false
                     ongoing = true; start = Date(); end = Date()
@@ -593,6 +685,12 @@ enum Notifier {
         content.body = body
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req) { _ in }
+    }
+
+    /// The `(NotificationContent) -> Void` seam shared by `DaemonModel` and
+    /// `Dispatcher` — one definition so the two inits can't drift.
+    static let deliver: @Sendable (NotificationContent) -> Void = { c in
+        post(title: c.title, subtitle: c.subtitle, body: c.message)
     }
 }
 
