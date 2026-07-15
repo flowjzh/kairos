@@ -10,19 +10,29 @@ use std::path::{Path, PathBuf};
 
 use kairos_codec::{decode_response, encode_request, RequestEnvelope, ResponseEnvelope};
 
-/// Default daemon socket path: `$HOME/.kairos/daemon.sock`.
+/// Default daemon socket path: `<runtime_dir>/daemon.sock`.
 pub fn default_socket_path() -> String {
-    kairos_dir("daemon.sock")
+    format!("{}/daemon.sock", runtime_dir())
 }
 
-/// Default spool directory: `$HOME/.kairos/spool`.
+/// Default spool directory: `<runtime_dir>/spool`.
 pub fn default_spool_dir() -> String {
-    kairos_dir("spool")
+    format!("{}/spool", runtime_dir())
 }
 
-fn kairos_dir(name: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    format!("{home}/.kairos/{name}")
+/// The runtime dir holding the socket + spool: `$KAIROS_RUNTIME_DIR`, else
+/// `$HOME/.kairos`. Overridable so a dev daemon and the release daemon can run
+/// side by side (the daemon reads the same var); the CLI/plugin inherit it from
+/// the shell (or Claude's hook env) and rendezvous on the right socket.
+fn runtime_dir() -> String {
+    runtime_dir_from(std::env::var("KAIROS_RUNTIME_DIR").ok(), &std::env::var("HOME").unwrap_or_default())
+}
+
+/// Pure resolution (env read hoisted out) so the fallback is unit-testable
+/// without mutating process env — cargo runs tests in parallel threads that
+/// share it.
+fn runtime_dir_from(override_dir: Option<String>, home: &str) -> String {
+    override_dir.unwrap_or_else(|| format!("{home}/.kairos"))
 }
 
 #[derive(Debug)]
@@ -86,5 +96,20 @@ impl SocketClient {
         std::fs::create_dir_all(&self.spool_dir)?;
         let path: &Path = &self.spool_dir.join(format!("{}.jsonl", uuid::Uuid::new_v4()));
         std::fs::write(path, format!("{line}\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_dir_falls_back_to_home_kairos() {
+        assert_eq!(runtime_dir_from(None, "/Users/me"), "/Users/me/.kairos");
+    }
+
+    #[test]
+    fn runtime_dir_honors_override() {
+        assert_eq!(runtime_dir_from(Some("/Users/me/.kairos-dev".into()), "/Users/me"), "/Users/me/.kairos-dev");
     }
 }

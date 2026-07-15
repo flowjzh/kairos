@@ -41,19 +41,27 @@ struct KairosApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: DaemonModel
+    private let paths: KairosPaths
     private var socketServer: SocketServer?
     private var sampler: IdleSamplerController?
     private var checkpointTimer: Timer?
     private var notificationDelegate: NotificationDelegate?
 
     override init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let dir = "\(home)/Library/Application Support/Kairos"
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        // One indirection point for socket/spool (runtime) + db (data), resolved
+        // purely from the environment. A separate instance (dev) is just a
+        // different `$KAIROS_RUNTIME_DIR`/`$KAIROS_DATA_DIR`, supplied by the
+        // build/launch config — never a dev/release branch in code.
+        let paths = KairosPaths(
+            env: ProcessInfo.processInfo.environment,
+            home: FileManager.default.homeDirectoryForCurrentUser.path
+        )
+        self.paths = paths
+        try? FileManager.default.createDirectory(atPath: paths.dataDir, withIntermediateDirectories: true)
         let store: Store
         do {
-            store = try Store(path: "\(dir)/kairos.db")
-            NSLog("kairos: opened disk store at \(dir)/kairos.db")
+            store = try Store(path: paths.dbPath)
+            NSLog("kairos: opened disk store at \(paths.dbPath)")
         } catch {
             NSLog("kairos: failed to open store, falling back to in-memory: \(error)")
             store = try! Store(path: ":memory:")
@@ -64,9 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let socketPath = "\(home)/.kairos/daemon.sock"
-        let spoolDir = "\(home)/.kairos/spool"
+        let socketPath = paths.socketPath
+        let spoolDir = paths.spoolDir
         let store = model.store
         let dispatcher = model.dispatcher
 

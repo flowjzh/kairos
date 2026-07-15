@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.kairos.daemon.dev</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Applications/Kairos Dev.app/Contents/MacOS/Kairos</string>
+	</array>
+	<!-- Opt-in: startup is manual (`make start-dev`). Flip RunAtLoad to true to
+	     autostart at login; KeepAlive stays false so `make stop-dev` truly stops it.
+	     `make install-dev` injects EnvironmentVariables (KAIROS_RUNTIME_DIR /
+	     KAIROS_DATA_DIR = the isolated -dev dirs) so this agent runs the dev
+	     instance — the daemon binary itself is dev-agnostic. -->
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/kairos-daemon-dev.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/kairos-daemon-dev.log</string>
+</dict>
+</plist>

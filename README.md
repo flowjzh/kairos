@@ -12,12 +12,42 @@ Kairos is a local-first, macOS **human-time kernel**. It records the time you ar
 
 ```sh
 make test                 # Swift Testing suite (no Xcode required)
-make app                  # build + assemble Kairos.app (ad-hoc signed)
+make app                  # build + assemble Kairos.app (release, stripped, ad-hoc signed)
 swift run KairosDaemon    # run the daemon directly — a menu-bar item appears
-make install              # install as a LaunchAgent (RunAtLoad + KeepAlive)
+make install              # install Kairos.app + an opt-in LaunchAgent (not started)
+make start                # start the release daemon on demand (make stop to stop)
 ```
 
-The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup.
+The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup. Both locations are overridable — `$KAIROS_RUNTIME_DIR` (socket + spool) and `$KAIROS_DATA_DIR` (store) — which is how the dev and release instances stay isolated (below).
+
+### Dev vs release
+
+Develop against a **separate daemon, socket, and database** so wiping the dev DB never touches real freelance data — and run both instances at once:
+
+```sh
+make install-dev          # install Kairos Dev.app (distinct bundle id)
+make start-dev            # start the dev daemon (uses ~/.kairos-dev + …/Kairos-dev)
+make dev                  # or: rebuild + open the dev app directly (quick debug loop)
+make clean-dev            # wipe ONLY the dev runtime + DB — release is untouched
+```
+
+The daemon code has no notion of "dev" — it just reads `$KAIROS_RUNTIME_DIR` / `$KAIROS_DATA_DIR` (or the release defaults). The dev/release difference lives entirely in the build: `make install-dev` bakes the `-dev` dirs into the dev app's `LSEnvironment` (for double-click / `make dev`) and its LaunchAgent's `EnvironmentVariables` (for `make start-dev`). To point *this repo's* Claude plugin + `kairos claude` at the dev daemon, set the two dirs for the session:
+
+```jsonc
+// .claude/settings.local.json (gitignored) — routes direct `claude` here to dev
+{ "env": {
+    "KAIROS_RUNTIME_DIR": "/Users/you/.kairos-dev",
+    "KAIROS_DATA_DIR": "/Users/you/Library/Application Support/Kairos-dev"
+} }
+```
+
+```sh
+# and export the same for `kairos claude` in a dev shell
+export KAIROS_RUNTIME_DIR=~/.kairos-dev
+export KAIROS_DATA_DIR=~/"Library/Application Support/Kairos-dev"
+```
+
+Both LaunchAgents are opt-in (`RunAtLoad=false`): the daemon runs only when you `make start`. Flip `RunAtLoad` to `true` in the plist to autostart at login.
 
 ```sh
 kairos client add "Acme"                            # prints the new client id
