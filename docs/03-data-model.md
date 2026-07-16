@@ -51,8 +51,7 @@ CREATE TABLE activities (
 CREATE TABLE events (
   id           INTEGER PRIMARY KEY,                       -- monotonic; snapshot watermark
   ts           REAL NOT NULL,                             -- epoch seconds (client-supplied; may be backdated)
-  activity_id  INTEGER REFERENCES activities(id),         -- NULL for global events (afk, pause)
-  source_id    INTEGER NOT NULL REFERENCES sources(id),   -- originator
+  activity_id  INTEGER REFERENCES activities(id),         -- the sole owner; NULL = global event (afk/pause), told apart by kind. An activity event's source is joined from activities (ADR 38)
   kind         INTEGER NOT NULL,                          -- event-kind code (see below); wire form is the slug
   payload      TEXT                                       -- JSON
 );
@@ -82,7 +81,6 @@ CREATE TABLE snapshots (
 
 CREATE INDEX idx_events_ts         ON events(ts);
 CREATE INDEX idx_events_activity   ON events(activity_id, ts);
-CREATE INDEX idx_events_source     ON events(source_id);
 CREATE INDEX idx_activities_source ON activities(source_id);
 CREATE INDEX idx_map_project       ON project_client_map(project_id, id);
 
@@ -105,7 +103,7 @@ CREATE TRIGGER map_immutable_d BEFORE DELETE ON project_client_map BEGIN SELECT 
 | `afk_off` | NULL | — | user returned |
 | `pause_on` / `pause_off` | NULL | — | manual global pause |
 
-Since **M4p3** `kind` and `activities.state` are stored as compact **integer codes** (the closed, code-defined vocabulary is efficient for a future client↔server scale), while the **wire/CLI form stays a human-readable slug** (`{"kind":"ai_submit"}`, `--kind ai_submit`) — the same wire-slug ↔ stored-id split as sources/projects. Timing is a pure function of `focus`/`blur` (base) minus `ai_*` (per-activity grind), `afk`, and `pause` (see [04](./04-attribution.md)). The former `activity_open` / `activity_close` / `force_owner` kinds are **removed**: activity lifecycle is the mutable `activities.state` column (not an event), and a manual `focus` replaces `force_owner`. `ai_stop`/`ai_submit` stay **agent-agnostic** — which agent is identified by `source_id` → `sources.slug`, never keyed on by attribution. `afk_on` `reason` is likewise a compact **integer code** (`0` idle — idle timeout, machine on; `1` sleep — system sleep / lid close; `2` offline — machine off / daemon-down gap), with a slug display form. `focus`/`blur` are generic — any focus reporter can emit them.
+Since **M4p3** `kind` and `activities.state` are stored as compact **integer codes** (the closed, code-defined vocabulary is efficient for a future client↔server scale), while the **wire/CLI form stays a human-readable slug** (`{"kind":"ai_submit"}`, `--kind ai_submit`) — the same wire-slug ↔ stored-id split as sources/projects. Timing is a pure function of `focus`/`blur` (base) minus `ai_*` (per-activity grind), `afk`, and `pause` (see [04](./04-attribution.md)). The former `activity_open` / `activity_close` / `force_owner` kinds are **removed**: activity lifecycle is the mutable `activities.state` column (not an event), and a manual `focus` replaces `force_owner`. `ai_stop`/`ai_submit` stay **agent-agnostic** — which agent is identified by the activity's `source` → `sources.slug`, never keyed on by attribution. `afk_on` `reason` is likewise a compact **integer code** (`0` idle — idle timeout, machine on; `1` sleep — system sleep / lid close; `2` offline — machine off / daemon-down gap), with a slug display form. `focus`/`blur` are generic — any focus reporter can emit them.
 
 ## Activity time, lifecycle & client override
 
@@ -121,7 +119,7 @@ Keeping the override as an event (not a column) keeps the reproducibility primit
 
 All three follow the same pattern: stable integer `id` (the FK target everywhere), editable display field, never hard-deleted. They are **not watermarked** — identity is pinned by the stable `id` referenced from the append-only tables; the display field resolves live.
 
-- **`sources`** — the originator of events (`claude-code`, `cursor`, `pty`, `manual`, `idle`, …). The daemon **auto-registers** a source by slug on first sight (upsert into `sources`), so adding a new AI agent is pure data — no code, no schema change. The `manual` flag (seeded `1` for `manual`) marks **user-managed, backdrop-eligible** sources; the wrapped-command source `pty` and agent sources are `auto` (`manual = 0`). See [04](./04-attribution.md).
+- **`sources`** — the source of an **activity** (`claude-code`, `cursor`, `pty`, `manual`, …). The daemon **auto-registers** a source by slug on first sight (upsert into `sources`), so adding a new AI agent is pure data — no code, no schema change. The `manual` flag (seeded `1` for `manual`) marks **user-managed, backdrop-eligible** sources; the wrapped-command source `pty` and agent sources are `auto` (`manual = 0`). Global events (afk/pause) carry no source — they are `activity_id = NULL` rows told apart by `kind` (ADR 38). See [04](./04-attribution.md).
 - **`projects`** — `slug` = cwd basename (ai sessions) or topic (meetings); `display_name` editable. Auto-registered by slug on first sight.
 - **`clients`** — user-created; `name` editable.
 

@@ -15,9 +15,8 @@ struct StoreOpsTests {
 
         do {
             let s = try Store(path: path)
-            let src = try await s.resolveSource(slug: "claude-code")
             _ = try await s.startActivity(source: "claude-code", externalId: "sess-persist", project: "proj", title: nil, metadata: nil)
-            _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 200)
+            _ = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 200)
             #expect(try await s.eventsWatermark() == 1)   // start writes no event; only afk_on
         }   // s deinits here → connection closes
 
@@ -32,8 +31,7 @@ struct StoreOpsTests {
         defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
 
         let writer = try Store(path: path)
-        let src = try await writer.resolveSource(slug: "claude-code")
-        _ = try await writer.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 1)
+        _ = try await writer.appendEvent(activityId: nil, kind: .afkOn, ts: 1)
 
         let reader = try Store(path: path)   // separate connection; writer still open
         #expect(try await reader.eventsWatermark() == 1)
@@ -52,9 +50,8 @@ struct StoreOpsTests {
     @Test
     func appendEventReturnsMonotonicIds() async throws {
         let s = try store()
-        let src = try await s.resolveSource(slug: "idle")
-        let id1 = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 1, payload: nil)
-        let id2 = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOff, ts: 2, payload: nil)
+        let id1 = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 1, payload: nil)
+        let id2 = try await s.appendEvent(activityId: nil, kind: .afkOff, ts: 2, payload: nil)
         #expect(id2 == id1 + 1)
         #expect(try await s.eventsWatermark() == id2)
     }

@@ -14,24 +14,20 @@ public final class IdleSamplerController: @unchecked Sendable {
     private let sessions: SessionRegistry?
     private let threshold: Double
     private let pollInterval: Double
-    private let sourceSlug: String
     private let queue = DispatchQueue(label: "kairos.idle")
     private var state = IdleSampler.State()
-    private var sourceId: Int64 = 0
     private var timer: DispatchSourceTimer?
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
 
-    public init(store: Store, sessions: SessionRegistry? = nil, threshold: Double = 60, pollInterval: Double = 5, sourceSlug: String = DaemonSources.idle) {
+    public init(store: Store, sessions: SessionRegistry? = nil, threshold: Double = 60, pollInterval: Double = 5) {
         self.store = store
         self.sessions = sessions
         self.threshold = threshold
         self.pollInterval = pollInterval
-        self.sourceSlug = sourceSlug
     }
 
     public func start() async {
-        sourceId = (try? await store.resolveSource(slug: sourceSlug)) ?? 0
         let now = Date().timeIntervalSince1970
         let lastTs = try? await store.lastEventTs()
         for transition in IdleSampler.startupGap(lastEventTs: lastTs, now: now, pollInterval: pollInterval) {
@@ -90,9 +86,9 @@ public final class IdleSamplerController: @unchecked Sendable {
         case .afkOn(let reason, let ts):
             if await focusedIsAfkImmune(at: ts) { return }  // passive activity: no afk to deduct
             let payload = try? Wire.data(AfkOnPayload(reason: reason.rawValue))
-            _ = try? await store.appendEvent(activityId: nil, sourceId: sourceId, kind: .afkOn, ts: ts, payload: payload)
+            _ = try? await store.appendEvent(activityId: nil, kind: .afkOn, ts: ts, payload: payload)
         case .afkOff(let ts):
-            _ = try? await store.appendEvent(activityId: nil, sourceId: sourceId, kind: .afkOff, ts: ts)
+            _ = try? await store.appendEvent(activityId: nil, kind: .afkOff, ts: ts)
         }
     }
 

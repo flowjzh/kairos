@@ -103,12 +103,11 @@ public actor Store {
 
     // MARK: Events
 
-    public func appendEvent(activityId: Int64?, sourceId: Int64, kind: EventKind, ts: Double, payload: Data? = nil) throws -> Int64 {
-        let stmt = try db.prepare("INSERT INTO events (ts, activity_id, source_id, kind, payload) VALUES (?, ?, ?, ?, ?) RETURNING id")
+    public func appendEvent(activityId: Int64?, kind: EventKind, ts: Double, payload: Data? = nil) throws -> Int64 {
+        let stmt = try db.prepare("INSERT INTO events (ts, activity_id, kind, payload) VALUES (?, ?, ?, ?) RETURNING id")
         try stmt.bind([
             .double(ts),
             activityId.map { .int($0) } ?? .null,
-            .int(sourceId),
             .int(Int64(kind.rawValue)),
             try jsonTextValue(payload),
         ])
@@ -238,13 +237,14 @@ public actor Store {
         return try startActivity(source: source, externalId: externalId, project: project, title: title, metadata: metadata)
     }
 
-    /// Append an activity-scoped event, looking up the activity's own source.
+    /// Append an activity-scoped event. Verifies the activity exists (else
+    /// `notFound`); the event's source is the activity's, joined on read (ADR 38).
     /// Used for `focus`/`blur`/`activity_override` where the caller has only the id.
     public func appendActivityEvent(activityId: Int64, kind: EventKind, ts: Double, payload: Data? = nil) throws {
-        let stmt = try db.prepare("SELECT source_id FROM activities WHERE id=?")
+        let stmt = try db.prepare("SELECT 1 FROM activities WHERE id=?")
         try stmt.bind([.int(activityId)])
         guard try stmt.step() else { throw StoreError.notFound("activity \(activityId)") }
-        _ = try appendEvent(activityId: activityId, sourceId: stmt.columnInt64(0), kind: kind, ts: ts, payload: payload)
+        _ = try appendEvent(activityId: activityId, kind: kind, ts: ts, payload: payload)
     }
 
     /// Is this activity's source `manual` (backdrop-eligible)? Gates auto-catch:
@@ -269,7 +269,7 @@ public actor Store {
         """
 
     /// The event SELECT fragment — column order is the contract for `readEventRow`.
-    private static let eventSelect = "SELECT id, ts, activity_id, source_id, kind, payload FROM events"
+    private static let eventSelect = "SELECT id, ts, activity_id, kind, payload FROM events"
 
     /// Comma-joined rawValues of the event kinds `GlobalState.reduce` reads,
     /// for the `WHERE kind IN (…)` of `loadGlobalEvents` (a literal, not rebuilt per call).
@@ -289,18 +289,17 @@ public actor Store {
         )
     }
 
-    /// Hydrate one event from a `SELECT id, ts, activity_id, source_id, kind,
-    /// payload` row; nil for an unknown kind (forward-compat with new event
-    /// kinds a reader doesn't recognise).
+    /// Hydrate one event from a `SELECT id, ts, activity_id, kind, payload` row;
+    /// nil for an unknown kind (forward-compat with new event kinds a reader
+    /// doesn't recognise).
     private func readEventRow(_ stmt: SQLiteStatement) -> Event? {
-        guard let kind = EventKind(rawValue: Int(stmt.columnInt64(4))) else { return nil }
+        guard let kind = EventKind(rawValue: Int(stmt.columnInt64(3))) else { return nil }
         return Event(
             id: stmt.columnInt64(0),
             ts: stmt.columnDouble(1),
             activityId: stmt.columnIsNull(2) ? nil : stmt.columnInt64(2),
             kind: kind,
-            sourceId: stmt.columnInt64(3),
-            payload: stmt.columnUTF8Data(5)
+            payload: stmt.columnUTF8Data(4)
         )
     }
 

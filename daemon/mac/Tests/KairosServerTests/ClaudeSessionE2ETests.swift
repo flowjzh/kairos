@@ -50,9 +50,8 @@ struct ClaudeSessionE2ETests {
     }
 
     private func injectAfk(_ store: Store, on: Double, off: Double) async throws {
-        let src = try await store.resolveSource(slug: DaemonSources.idle)
-        _ = try await store.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: on)
-        _ = try await store.appendEvent(activityId: nil, sourceId: src, kind: .afkOff, ts: off)
+        _ = try await store.appendEvent(activityId: nil, kind: .afkOn, ts: on)
+        _ = try await store.appendEvent(activityId: nil, kind: .afkOff, ts: off)
     }
 
     @Test

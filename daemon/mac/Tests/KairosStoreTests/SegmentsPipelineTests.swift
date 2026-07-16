@@ -36,10 +36,9 @@ struct SegmentsPipelineTests {
         // sampler gate, not a read-time rule — so afk in the log always deducts).
         let s = try store()
         let act = try await s.startActivity(source: "manual", externalId: nil, project: nil, title: "Sync", metadata: nil)
-        let src = try await s.resolveSource(slug: "idle")
         try await s.appendActivityEvent(activityId: act, kind: .focus, ts: 0)
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 1200)
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOff, ts: 2400)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 1200)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOff, ts: 2400)
         try await s.appendActivityEvent(activityId: act, kind: .blur, ts: 3600)
 
         let result = try await s.attributedSegments(from: 0, to: 7200)
@@ -50,10 +49,9 @@ struct SegmentsPipelineTests {
     func pauseHolesFocusSegment() async throws {
         let s = try store()
         let act = try await s.startActivity(source: "manual", externalId: nil, project: nil, title: "Sync", metadata: nil)
-        let src = try await s.resolveSource(slug: "kairos")
         try await s.appendActivityEvent(activityId: act, kind: .focus, ts: 0)
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .pauseOn, ts: 1800)
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .pauseOff, ts: 2400)
+        _ = try await s.appendEvent(activityId: nil, kind: .pauseOn, ts: 1800)
+        _ = try await s.appendEvent(activityId: nil, kind: .pauseOff, ts: 2400)
         try await s.appendActivityEvent(activityId: act, kind: .blur, ts: 3600)
 
         let result = try await s.attributedSegments(from: 0, to: 7200)

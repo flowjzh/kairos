@@ -78,8 +78,7 @@ struct StoreClientMappingTests {
         try await s.setMapping(project: "proj", clientId: acme, billable: true)
         let act = try await s.startActivity(source: "meeting", externalId: nil, project: "proj", title: "Sync", metadata: nil)
         let payload = try JSONSerialization.data(withJSONObject: ["client_id": Int(vault), "billable": false])
-        let src = try await s.resolveSource(slug: "meeting")
-        _ = try await s.appendEvent(activityId: act, sourceId: src, kind: .activityOverride, ts: 1, payload: payload)
+        _ = try await s.appendEvent(activityId: act, kind: .activityOverride, ts: 1, payload: payload)
         let resolved = try await s.resolveClient(
             activityId: act,
             eventsWatermark: try await s.eventsWatermark(),
@@ -105,11 +104,10 @@ struct StoreClientMappingTests {
     @Test
     func loadEventsRespectsWatermark() async throws {
         let s = try store()
-        let src = try await s.resolveSource(slug: "idle")
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 1, payload: nil)
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOff, ts: 2, payload: nil)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 1, payload: nil)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOff, ts: 2, payload: nil)
         let wm = try await s.eventsWatermark()
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .afkOn, ts: 3, payload: nil)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 3, payload: nil)
         #expect(try await s.loadEvents(upToWatermark: wm).count == 2)
         #expect(try await s.loadEvents().count == 3)
     }

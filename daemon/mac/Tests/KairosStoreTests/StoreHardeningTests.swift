@@ -59,8 +59,7 @@ struct StoreHardeningTests {
         let s = try store()
         let act = try await s.startActivity(source: "claude-code", externalId: "s1", project: "p", title: nil, metadata: nil)
         try await focusAt(s, act, 0)
-        let idle = try await s.resolveSource(slug: "idle")
-        _ = try await s.appendEvent(activityId: nil, sourceId: idle, kind: .afkOn, ts: 5)
+        _ = try await s.appendEvent(activityId: nil, kind: .afkOn, ts: 5)
 
         let result = try await s.attributedSegments(from: 50, to: 60)
         #expect(result.segments.isEmpty)
@@ -90,8 +89,7 @@ struct StoreHardeningTests {
         let s = try store()
         let stream = await s.changes()
         var iterator = stream.makeAsyncIterator()
-        let src = try await s.resolveSource(slug: "idle")
-        _ = try await s.appendEvent(activityId: nil, sourceId: src, kind: .pauseOn, ts: 0)
+        _ = try await s.appendEvent(activityId: nil, kind: .pauseOn, ts: 0)
         let signal: Void? = await iterator.next()
         #expect(signal != nil)
     }

@@ -85,6 +85,22 @@ final class SQLiteConnection {
                 """)
             try exec("INSERT INTO schema_version (version, applied_at) VALUES (2, \(Date().timeIntervalSince1970));")
         }
+        if current < 3 {
+            // Remove events.source_id (ADR 38). It was dead for activity events (a
+            // copy of activities.source_id, never read) and forced fake `kairos`/
+            // `idle` sources onto global (activity-less) pause/afk events only to
+            // satisfy the NOT NULL FK. Ownership is now `activity_id` alone (NULL =
+            // global); an activity event's source is joined from `activities`.
+            // Drop the index first (a column can't be dropped while indexed), then
+            // the now-orphan internal sources. DDL, so `events`' append-only
+            // triggers don't fire.
+            try exec("""
+                DROP INDEX IF EXISTS idx_events_source;
+                ALTER TABLE events DROP COLUMN source_id;
+                DELETE FROM sources WHERE slug IN ('kairos', 'idle');
+                """)
+            try exec("INSERT INTO schema_version (version, applied_at) VALUES (3, \(Date().timeIntervalSince1970));")
+        }
     }
 }
 

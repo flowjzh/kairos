@@ -3,14 +3,6 @@ import KairosCore
 import KairosRPC
 import KairosStore
 
-/// Source slugs under which the daemon records its own (non-activity) events.
-public enum DaemonSources {
-    /// Manual control events (pause) from the menu bar / CLI.
-    public static let control = "kairos"
-    /// afk spans from the idle sampler.
-    public static let idle = "idle"
-}
-
 /// Maps a line-JSON `RequestEnvelope` to `Store` operations and back. The only
 /// daemon-scoped state is the `SessionRegistry` (the ephemeral kid→activity map
 /// + AFK-immune set, M4/M4p3). Since M4p3 timing is `focus`/`blur` only:
@@ -222,8 +214,7 @@ public struct Dispatcher: Sendable {
     private func controlPause(_ request: RequestEnvelope, store: Store, now: @Sendable () -> Double) async throws -> JSONValue {
         let p = try Wire.decodeValue(request.params, as: ControlPauseParams.self)
         try rejectFuture(p.ts, now: now)
-        let sourceId = try await store.resolveSource(slug: DaemonSources.control)
-        _ = try await store.appendEvent(activityId: nil, sourceId: sourceId, kind: p.paused ? .pauseOn : .pauseOff, ts: p.ts)
+        _ = try await store.appendEvent(activityId: nil, kind: p.paused ? .pauseOn : .pauseOff, ts: p.ts)
         return try Wire.encodeValue(EmptyResult())
     }
 

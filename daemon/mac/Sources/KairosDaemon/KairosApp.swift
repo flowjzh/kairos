@@ -144,7 +144,6 @@ final class DaemonModel {
     private(set) var clients: [Client] = []
     private(set) var mappings: [ProjectMapping] = []
     private(set) var projects: [String] = []
-    private var kairosSourceId: Int64 = 0
     private var refreshTimer: Timer?
     private var refreshTask: Task<Void, Never>?
     /// Focus at the previous refresh — to detect a scheduled activity taking
@@ -184,9 +183,6 @@ final class DaemonModel {
     }
 
     func refresh() async {
-        if kairosSourceId == 0 {
-            kairosSourceId = (try? await store.resolveSource(slug: DaemonSources.control)) ?? 0
-        }
         let now = Date().timeIntervalSince1970
         let events = (try? await store.loadGlobalEvents(since: now - Store.liveWindow)) ?? []
         let state = GlobalState.reduce(events: events, to: now)
@@ -237,7 +233,7 @@ final class DaemonModel {
 
     func togglePause() async {
         let now = Date().timeIntervalSince1970
-        _ = try? await store.appendEvent(activityId: nil, sourceId: kairosSourceId, kind: !isPaused ? .pauseOn : .pauseOff, ts: now)
+        _ = try? await store.appendEvent(activityId: nil, kind: !isPaused ? .pauseOn : .pauseOff, ts: now)
         await refresh()
     }
 

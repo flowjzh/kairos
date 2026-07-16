@@ -21,7 +21,7 @@ struct SchemaTests {
     func schemaVersionIsCurrent() async throws {
         let s = try store()
         let v = try await s.scalarInt("SELECT MAX(version) FROM schema_version")
-        #expect(v == 2)
+        #expect(v == 3)
     }
 
     @Test
@@ -30,14 +30,13 @@ struct SchemaTests {
         // Opening a second store on a fresh in-memory db runs migrate again;
         // a no-op when already current (one row per version).
         let v = try await s.scalarInt("SELECT COUNT(*) FROM schema_version")
-        #expect(v == 2)
+        #expect(v == 3)
     }
 
     @Test
     func eventsAppendOnlyRejectsUpdate() async throws {
         let s = try store()
-        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (100, 'test', 'test')")
-        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 100, 5, NULL)")
+        try await s.exec("INSERT INTO events (id, ts, activity_id, kind, payload) VALUES (1, 0, NULL, 5, NULL)")
         do {
             try await s.exec("UPDATE events SET kind=1 WHERE id=1")
             Issue.record("UPDATE on append-only events should be rejected")
@@ -49,8 +48,7 @@ struct SchemaTests {
     @Test
     func eventsAppendOnlyRejectsDelete() async throws {
         let s = try store()
-        try await s.exec("INSERT INTO sources (id, slug, display_name) VALUES (100, 'test', 'test')")
-        try await s.exec("INSERT INTO events (id, ts, activity_id, source_id, kind, payload) VALUES (1, 0, NULL, 100, 5, NULL)")
+        try await s.exec("INSERT INTO events (id, ts, activity_id, kind, payload) VALUES (1, 0, NULL, 5, NULL)")
         do {
             try await s.exec("DELETE FROM events WHERE id=1")
             Issue.record("DELETE on append-only events should be rejected")
