@@ -8,3 +8,13 @@ edition = "2021"
 
 [profile.release]
 strip = true
+lto = true
+codegen-units = 1
+
+# The Claude Code hook (`kairos-claude-code`) has no terminal/PTY state to unwind
+# on panic, so it aborts instead — a smaller binary. `panic` can't be a per-package
+# override, hence its own profile: `make plugin` builds the hook here, while the CLI
+# keeps unwinding so a panic can restore the terminal out of raw mode.
+[profile.hook]
+inherits = "release"
+panic = "abort"

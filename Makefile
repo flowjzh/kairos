@@ -31,8 +31,12 @@ DEV_DATA_DIR    := $(HOME)/Library/Application Support/Kairos-dev
 build:
 	swift build --package-path $(SWIFT_PKG)
 
+# Build the shared release CLI (`kairos`) and the plugin hook binary. Each is built
+# once under its own profile: the CLI unwinds on panic (restoring the terminal from
+# raw mode), the hook aborts (no state to unwind → a smaller binary in target/hook).
 rust:
-	cargo build --release
+	cargo build --release --bin kairos
+	cargo build --profile hook --bin kairos-claude-code
 
 test:
 	cargo test
@@ -75,7 +79,7 @@ app-dev: build
 #   /plugin install kairos-claude-code@kairos
 plugin: rust
 	@mkdir -p $(PLUGIN_DIR)/bin
-	cp target/release/kairos-claude-code $(PLUGIN_DIR)/bin/kairos-claude-code
+	cp target/hook/kairos-claude-code $(PLUGIN_DIR)/bin/kairos-claude-code
 	@echo
 	@echo "Staged $(PLUGIN_DIR)/bin/kairos-claude-code"
 	@echo "Formal install — run inside Claude Code:"
