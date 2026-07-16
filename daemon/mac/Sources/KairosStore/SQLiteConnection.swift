@@ -68,9 +68,23 @@ final class SQLiteConnection {
     func migrate() throws {
         try exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at REAL NOT NULL);")
         let current = try scalarInt("SELECT COALESCE(MAX(version), 0) FROM schema_version;")
-        guard current < 1 else { return }
-        try exec(Schema.v1)
-        try exec("INSERT INTO schema_version (version, applied_at) VALUES (1, \(Date().timeIntervalSince1970));")
+        if current < 1 {
+            try exec(Schema.v1)
+            try exec("INSERT INTO schema_version (version, applied_at) VALUES (1, \(Date().timeIntervalSince1970));")
+        }
+        if current < 2 {
+            // Collapse activities.state to a visibility flag (ADR 37): the old
+            // active(0)/stopped(1)/archived(2) → visible(0)/archived(1). A stopped
+            // *manual* becomes visible (it shows in Recent, derived from its blur);
+            // a stopped *auto* (exited session) and archived rows become archived.
+            try exec("""
+                UPDATE activities SET state = CASE
+                    WHEN state = 2 OR (state = 1 AND source_id IN (SELECT id FROM sources WHERE manual = 0)) THEN 1
+                    ELSE 0
+                END;
+                """)
+            try exec("INSERT INTO schema_version (version, applied_at) VALUES (2, \(Date().timeIntervalSince1970));")
+        }
     }
 }
 

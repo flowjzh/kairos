@@ -3,8 +3,8 @@ import KairosCore
 import KairosStore
 @testable import KairosServer
 
-/// Time-derived menu placement (bug: a future/ongoing timed meeting is stored
-/// `stopped` at creation, so state-column placement wrongly dumped it in Recent).
+/// Menu placement, fully derived from the focus/blur log (ADR 37). One visible
+/// list is split into Ongoing / Upcoming / Recent. "Ended" is manual-only.
 @Suite struct ActivityBucketsTests {
     let now = 100.0
 
@@ -20,61 +20,53 @@ import KairosStore
         Event(id: id, ts: ts, activityId: act, kind: kind)
     }
 
-    @Test func futureTimedMeetingIsUpcomingNotRecent() {
-        // stored stopped at creation, focus/blur both in the future.
+    @Test func futureManualIsUpcoming() {
         let r = ActivityBuckets.partition(
-            active: [], stopped: [manual(1)],
+            visible: [manual(1)],
             events: [ev(1, 200, 1, .focus), ev(2, 300, 1, .blur)], now: now)
         #expect(r.upcoming.map(\.id) == [1])
         #expect(r.upcoming.first?.start == 200)
-        #expect(r.recent.isEmpty && r.active.isEmpty)
+        #expect(r.ongoing.isEmpty && r.recent.isEmpty)
     }
 
-    @Test func ongoingTimedMeetingIsActiveNotRecent() {
-        // started (focus in past), end still ahead → running.
+    @Test func ongoingManualIsOngoing() {
+        // started (focus past), end still ahead.
         let r = ActivityBuckets.partition(
-            active: [], stopped: [manual(2)],
+            visible: [manual(2)],
             events: [ev(1, 50, 2, .focus), ev(2, 200, 2, .blur)], now: now)
-        #expect(r.active.map(\.id) == [2])
+        #expect(r.ongoing.map(\.id) == [2])
         #expect(r.upcoming.isEmpty && r.recent.isEmpty)
     }
 
-    @Test func endedTimedMeetingIsRecent() {
+    @Test func endedManualIsRecent() {
+        // both focus and blur in the past.
         let r = ActivityBuckets.partition(
-            active: [], stopped: [manual(3)],
+            visible: [manual(3)],
             events: [ev(1, 10, 3, .focus), ev(2, 50, 3, .blur)], now: now)
         #expect(r.recent.map(\.id) == [3])
-        #expect(r.upcoming.isEmpty && r.active.isEmpty)
+        #expect(r.ongoing.isEmpty && r.upcoming.isEmpty)
     }
 
-    @Test func liveFutureMeetingIsUpcoming() {
-        // untimed (no end) future meeting: state=active, focus in the future.
+    @Test func backdropWithoutEndIsOngoing() {
+        // a live manual backdrop (focus past, no blur).
         let r = ActivityBuckets.partition(
-            active: [manual(4)], stopped: [],
-            events: [ev(1, 200, 4, .focus)], now: now)
-        #expect(r.upcoming.map(\.id) == [4])
+            visible: [manual(4)], events: [ev(1, 10, 4, .focus)], now: now)
+        #expect(r.ongoing.map(\.id) == [4])
     }
 
-    @Test func liveBackdropStaysActiveEvenWhenBlurred() {
-        // A live backdrop the user toggled off (blur in the past) must NOT fall
-        // into Recent — a blur on a live row means "unfocused", not "ended".
+    @Test func autoWithPastBlurStaysOngoing() {
+        // an auto activity's blur is transient (terminal unfocused), not an end —
+        // it stays Ongoing while visible (exited autos are archived, not here).
         let r = ActivityBuckets.partition(
-            active: [manual(5)], stopped: [],
-            events: [ev(1, 10, 5, .focus), ev(2, 50, 5, .blur)], now: now)
-        #expect(r.active.map(\.id) == [5])
+            visible: [auto(5)], events: [ev(1, 10, 5, .focus), ev(2, 50, 5, .blur)], now: now)
+        #expect(r.ongoing.map(\.id) == [5])
         #expect(r.recent.isEmpty)
     }
 
-    @Test func autoActivityIsAlwaysActive() {
+    @Test func upcomingSortedByStart() {
         let r = ActivityBuckets.partition(
-            active: [auto(6)], stopped: [], events: [], now: now)
-        #expect(r.active.map(\.id) == [6])
-    }
-
-    @Test func upcomingIsSortedByStart() {
-        let r = ActivityBuckets.partition(
-            active: [], stopped: [manual(7), manual(8)],
-            events: [ev(1, 300, 7, .focus), ev(2, 150, 8, .focus)], now: now)
-        #expect(r.upcoming.map(\.id) == [8, 7])   // 150 before 300
+            visible: [manual(6), manual(7)],
+            events: [ev(1, 300, 6, .focus), ev(2, 150, 7, .focus)], now: now)
+        #expect(r.upcoming.map(\.id) == [7, 6])   // 150 before 300
     }
 }

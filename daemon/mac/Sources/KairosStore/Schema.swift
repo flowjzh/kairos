@@ -30,7 +30,7 @@ enum Schema {
           project_id   INTEGER REFERENCES projects(id),
           title        TEXT,
           metadata     TEXT,
-          state        INTEGER NOT NULL DEFAULT 0,
+          state        INTEGER NOT NULL DEFAULT 0,  -- 0=visible, 1=archived (ADR 37; placement is derived from events)
           UNIQUE (source_id, external_id)
         );
 

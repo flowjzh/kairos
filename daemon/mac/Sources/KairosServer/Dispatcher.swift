@@ -124,9 +124,9 @@ public struct Dispatcher: Sendable {
         } else {
             throw RPCError(code: "bad_request", message: "activities.stop requires kairos_session_id or (source, external_id)")
         }
-        // Stop first (so a later best-effort step can't leave it active), then
-        // blur (which also auto-catches to a backdrop if it was focused).
-        try await store.setActivityState(activityId: id, .stopped)
+        // Archive (hide) first, then blur (which also auto-catches to a backdrop
+        // if it was focused). `archived` = hidden from every list (ADR 37).
+        try await store.setActivityState(activityId: id, .archived)
         await sessions.setAfkImmune(id, false)
         try await recordFocus(activityId: id, focused: false, ts: p.ts, store: store)
         return try Wire.encodeValue(EmptyResult())
@@ -181,33 +181,33 @@ public struct Dispatcher: Sendable {
     }
 
     /// Backdrop auto-catch (docs/04): after a foreground `blur` leaves the pointer
-    /// at none, fall back to an active manual backdrop (1 → automatic;
+    /// at none, fall back to an ongoing manual backdrop (1 → automatic;
     /// >1 → most-recently-focused + a notification). No-op if a manual activity
     /// was the one blurred, or a successor already holds focus.
     private func autoCatch(blurred: Int64, ts: Double, store: Store) async throws {
         // Cheap indexed guards first, so the common blur (an auto split with no
         // backdrop waiting) never scans the event log.
         guard try await !store.isActivityManual(activityId: blurred) else { return }
-        let backdrops = try await store.activeManualActivities()
-        guard !backdrops.isEmpty else { return }
-        let events = try await store.loadGlobalEvents()
+        let candidates = try await store.visibleManualActivities()
+        guard !candidates.isEmpty else { return }
+        let events = try await store.loadGlobalEvents(since: ts - Store.liveWindow)
         guard GlobalState.reduce(events: events, to: ts).focused == nil else { return }
-        let targetId = mostRecentlyFocused(backdrops.map(\.id), events: events) ?? backdrops.last!.id
+        // Only ongoing backdrops are catch targets — started and not ended.
+        let earliestFocus = ActivityBuckets.earliestFocus(events: events)
+        let lastBlur = ActivityBuckets.lastBlur(events: events)
+        let lastFocus = ActivityBuckets.lastFocus(events: events)
+        let backdrops = candidates.filter { a in
+            let started = earliestFocus[a.id].map { $0 <= ts } ?? false
+            let ended = lastBlur[a.id].map { $0 <= ts } ?? false
+            return started && !ended
+        }
+        guard !backdrops.isEmpty else { return }
+        let targetId = backdrops.map(\.id).max(by: { (lastFocus[$0] ?? -.infinity) < (lastFocus[$1] ?? -.infinity) }) ?? backdrops.last!.id
         try await store.appendActivityEvent(activityId: targetId, kind: .focus, ts: ts)
         if backdrops.count > 1 {
             let title = backdrops.first { $0.id == targetId }?.title ?? "an activity"
             notify(NotificationContent(title: "Kairos", message: "Multiple active activities — focus switched to \(title)"))
         }
-    }
-
-    /// The candidate id whose latest `focus` event is most recent.
-    private func mostRecentlyFocused(_ ids: [Int64], events: [Event]) -> Int64? {
-        let idSet = Set(ids)
-        var latest: [Int64: Double] = [:]
-        for e in events where e.kind == .focus {
-            if let a = e.activityId, idSet.contains(a) { latest[a] = max(latest[a] ?? -.infinity, e.ts) }
-        }
-        return latest.max { $0.value < $1.value }?.key
     }
 
     /// Register kid → activity and flush any focus buffered before the mapping.
@@ -316,7 +316,7 @@ public struct Dispatcher: Sendable {
     }
 
     private func focusedGet(_ request: RequestEnvelope, store: Store, now: @Sendable () -> Double) async throws -> JSONValue {
-        let events = try await store.loadGlobalEvents()
+        let events = try await store.loadGlobalEvents(since: now() - Store.liveWindow)
         guard let id = GlobalState.reduce(events: events, to: now()).focused,
               let record = try await store.loadActivity(id: id) else {
             return try Wire.encodeValue(FocusedGetResult(activity: nil))

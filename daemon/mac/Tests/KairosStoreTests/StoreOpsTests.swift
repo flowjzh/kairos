@@ -69,14 +69,14 @@ struct StoreOpsTests {
     }
 
     @Test
-    func startResumesAStoppedActivity() async throws {
+    func startResumesAnArchivedActivity() async throws {
         let s = try store()
         let a = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: nil, metadata: nil)
-        try await s.setActivityState(activityId: a, .stopped)
-        #expect(try await s.activeActivities().isEmpty)
+        try await s.setActivityState(activityId: a, .archived)
+        #expect(try await s.visibleActivities().isEmpty)
         let b = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: nil, metadata: nil)
-        #expect(b == a)   // same row, reactivated
-        #expect(try await s.activeActivities().map(\.id) == [a])
+        #expect(b == a)   // same row, made visible again
+        #expect(try await s.visibleActivities().map(\.id) == [a])
     }
 
     @Test
@@ -88,24 +88,23 @@ struct StoreOpsTests {
     }
 
     @Test
-    func stopSetsStoppedState() async throws {
+    func archiveHidesActivity() async throws {
         let s = try store()
         let id = try await s.startActivity(source: "manual", externalId: nil, project: nil, title: "Sync", metadata: nil)
-        #expect(try await s.activeActivities().count == 1)
-        try await s.setActivityState(activityId: id, .stopped)
-        #expect(try await s.activeActivities().isEmpty)
+        #expect(try await s.visibleActivities().count == 1)
+        try await s.setActivityState(activityId: id, .archived)
+        #expect(try await s.visibleActivities().isEmpty)
     }
 
     @Test
-    func stoppedManualListedForReactivation() async throws {
+    func visibleManualActivitiesExcludesArchivedAndAuto() async throws {
         let s = try store()
         let id = try await s.startActivity(source: "manual", externalId: nil, project: nil, title: "Sync", metadata: nil)
-        try await s.setActivityState(activityId: id, .stopped)
-        #expect(try await s.recentStoppedManualActivities().map(\.id) == [id])
-        // An auto (pty/claude) stopped activity is NOT offered for menu reactivation.
-        let auto = try await s.startActivity(source: "claude-code", externalId: "x", project: nil, title: nil, metadata: nil)
-        try await s.setActivityState(activityId: auto, .stopped)
-        #expect(try await s.recentStoppedManualActivities().map(\.id) == [id])
+        try await s.setActivityState(activityId: id, .archived)
+        #expect(try await s.visibleManualActivities().isEmpty)   // archived manual hidden
+        // An auto activity is not a manual candidate.
+        _ = try await s.startActivity(source: "claude-code", externalId: "x", project: nil, title: nil, metadata: nil)
+        #expect(try await s.visibleManualActivities().isEmpty)
     }
 
     @Test
@@ -120,7 +119,7 @@ struct StoreOpsTests {
     func startPreservesCJKTitle() async throws {
         let s = try store()
         let id = try await s.startActivity(source: "manual", externalId: nil, project: nil, title: "客户会议", metadata: nil)
-        let active = try await s.activeActivities()
+        let active = try await s.visibleActivities()
         #expect(active.count == 1)
         #expect(active[0].id == id)
         #expect(active[0].title == "客户会议")

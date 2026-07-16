@@ -15,55 +15,71 @@ public struct ScheduledActivity: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Time-derived menu placement, independent of the mutable `state` column: a
-/// manual activity's `focus`/`blur` timeline decides whether it is upcoming
-/// (start ahead), active (running), or recent (ended). This is why a timed
-/// meeting — stored `stopped` at creation with a future `blur@end` — still lands
-/// in the right section instead of always in Recent.
+/// Menu placement, fully derived from the focus/blur log (ADR 37). `state` is a
+/// visibility flag only, so the single visible list is split into the three
+/// sections by each activity's timeline. "Ended" is a manual-only notion: a
+/// manual's blur is its end (scheduled `blur@end` or the ✕-now blur); an auto
+/// activity's blurs are transient, so it stays Ongoing while visible (an exited
+/// auto is `archived`, never in this list).
 public enum ActivityBuckets {
-    /// Partition the two store lists into the three menu sections. `active` are
-    /// the live (`state=active`) rows; `stopped` are the stopped manual rows
-    /// (incl. timed meetings). `events` supplies each activity's focus/blur
-    /// times; `now` is the clock. Upcoming is returned sorted by start.
+    /// Split the visible activities into Ongoing / Upcoming / Recent.
+    /// - manual + earliest focus ahead → upcoming
+    /// - manual + last blur in the past → recent (ended)
+    /// - else → ongoing (manual backdrop/ongoing, or any visible auto)
+    /// Upcoming is sorted by start; recent by last focus time.
     public static func partition(
-        active: [ActivityRecord],
-        stopped: [ActivityRecord],
+        visible: [ActivityRecord],
         events: [Event],
         now: Double
-    ) -> (active: [ActivityRecord], upcoming: [ScheduledActivity], recent: [ActivityRecord]) {
-        var earliestFocus: [Int64: Double] = [:]
-        var lastBlur: [Int64: Double] = [:]
-        for e in events {
-            guard let a = e.activityId else { continue }
-            if e.kind == .focus { earliestFocus[a] = min(earliestFocus[a] ?? .infinity, e.ts) }
-            else if e.kind == .blur { lastBlur[a] = max(lastBlur[a] ?? -.infinity, e.ts) }
-        }
-
-        var activeOut: [ActivityRecord] = []
+    ) -> (ongoing: [ActivityRecord], upcoming: [ScheduledActivity], recent: [ActivityRecord]) {
+        let earliestFocus = Self.earliestFocus(events: events)
+        let lastBlur = Self.lastBlur(events: events)
+        let lastFocus = Self.lastFocus(events: events)
+        var ongoing: [ActivityRecord] = []
         var upcoming: [ScheduledActivity] = []
         var recent: [ActivityRecord] = []
-
-        // Live rows: an unstarted manual one is upcoming, else active. A blur here
-        // only means "not currently focused", never "ended".
-        for a in active {
+        for a in visible {
             if a.manual, let start = earliestFocus[a.id], start > now {
                 upcoming.append(ScheduledActivity(record: a, start: start))
-            } else {
-                activeOut.append(a)
-            }
-        }
-        // Stopped manual rows: future start → upcoming, still-running (end ahead)
-        // → active, concluded (last blur in the past) → recent.
-        for a in stopped {
-            if let start = earliestFocus[a.id], start > now {
-                upcoming.append(ScheduledActivity(record: a, start: start))
-            } else if let end = lastBlur[a.id], end > now {
-                activeOut.append(a)
-            } else {
+            } else if a.manual, let end = lastBlur[a.id], end <= now {
                 recent.append(a)
+            } else {
+                ongoing.append(a)
             }
         }
-
-        return (activeOut, upcoming.sorted { $0.start < $1.start }, recent)
+        let byLastFocus = recent.sorted { (lastFocus[$0.id] ?? 0) > (lastFocus[$1.id] ?? 0) }
+        return (ongoing, upcoming.sorted { $0.start < $1.start }, byLastFocus)
     }
+
+    /// Earliest `focus` ts per activity (a manual's start).
+    static func earliestFocus(events: [Event]) -> [Int64: Double] {
+        extreme(events: events, kind: .focus, min: true)
+    }
+
+    /// Latest `blur` ts per activity (a manual's end).
+    static func lastBlur(events: [Event]) -> [Int64: Double] {
+        extreme(events: events, kind: .blur, min: false)
+    }
+
+    /// Latest `focus` ts per activity (for ordering Recent + auto-catch's
+    /// most-recently-focused pick).
+    static func lastFocus(events: [Event]) -> [Int64: Double] {
+        extreme(events: events, kind: .focus, min: false)
+    }
+
+    /// Per-activity extreme `ts` of events of `kind` — the one fold behind
+    /// earliest-focus / last-blur / last-focus.
+    private static func extreme(events: [Event], kind: EventKind, min: Bool) -> [Int64: Double] {
+        var out: [Int64: Double] = [:]
+        for e in events where e.kind == kind {
+            guard let a = e.activityId else { continue }
+            out[a] = out[a].map { minw($0, e.ts, min: min) } ?? e.ts
+        }
+        return out
+    }
+}
+
+/// `min` ? lesser : greater — pick the extreme, defaulting the seed accordingly.
+private func minw(_ a: Double, _ b: Double, min: Bool) -> Double {
+    min ? Swift.min(a, b) : Swift.max(a, b)
 }

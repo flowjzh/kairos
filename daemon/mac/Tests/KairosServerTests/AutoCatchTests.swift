@@ -35,7 +35,7 @@ import KairosStore
     }
 
     private func focused(_ store: Store, _ ts: Double) async throws -> Int64? {
-        GlobalState.reduce(events: try await store.loadGlobalEvents(), to: ts).focused
+        GlobalState.reduce(events: try await store.loadGlobalEvents(since: 0), to: ts).focused
     }
 
     private func manualId(_ store: Store, _ ext: String) async throws -> Int64? {
@@ -46,7 +46,7 @@ import KairosStore
         let d = Dispatcher()
         let store = try Store(path: ":memory:")
         try await startManual(d, store, "m1")          // inserted first
-        try await startManual(d, store, "m2")          // inserted second (activeManualActivities last)
+        try await startManual(d, store, "m2")          // inserted second (visibleManualActivities last)
         try await focus(d, store, "m2", now() + 1)     // focused earlier
         try await focus(d, store, "m1", now() + 2)     // focused later → most recent
         try await pty(d, store, kid: "k1", focused: true, ts: now() + 3)
@@ -60,10 +60,12 @@ import KairosStore
         let rec = Notifications()
         let d = Dispatcher(notify: { rec.append($0) })
 
-        // Two backdrops → ambiguous → notify once.
+        // Two ongoing backdrops → ambiguous → notify once. (Both must be focused:
+        // an unfocused manual isn't an ongoing catch candidate.)
         let store2 = try Store(path: ":memory:")
         try await startManual(d, store2, "m1"); try await startManual(d, store2, "m2")
         try await focus(d, store2, "m1", now() + 1)
+        try await focus(d, store2, "m2", now() + 1)
         try await pty(d, store2, kid: "k1", focused: true, ts: now() + 2)
         try await pty(d, store2, kid: "k1", focused: false, ts: now() + 3)
         #expect(rec.all.count == 1)
@@ -83,6 +85,25 @@ import KairosStore
         try await pty(d, store, kid: "k1", focused: true, ts: now() + 1)
         try await pty(d, store, kid: "k1", focused: false, ts: now() + 2)
         #expect(try await focused(store, now() + 2) == nil)   // nothing to catch to
+    }
+
+    @Test func endedManualIsNotABackdropOngoingIs() async throws {
+        // Live derivation (ADR 37): an ended manual (visible, past blur) is NOT a
+        // catch target; an ongoing one is. No scheduler/reconciler involved.
+        let d = Dispatcher()
+        let store = try Store(path: ":memory:")
+        // Ended meeting: focus + blur both past, visible.
+        let ended = try await store.startActivity(source: "manual", externalId: nil, project: nil, title: "ended", metadata: nil)
+        try await store.appendActivityEvent(activityId: ended, kind: .focus, ts: now() - 200)
+        try await store.appendActivityEvent(activityId: ended, kind: .blur, ts: now() - 100)
+        // Ongoing meeting: focus past, blur ahead.
+        let ongoing = try await store.startActivity(source: "manual", externalId: nil, project: nil, title: "ongoing", metadata: nil)
+        try await store.appendActivityEvent(activityId: ongoing, kind: .focus, ts: now() - 50)
+        try await store.appendActivityEvent(activityId: ongoing, kind: .blur, ts: now() + 100)
+
+        try await pty(d, store, kid: "k1", focused: true, ts: now() + 1)
+        try await pty(d, store, kid: "k1", focused: false, ts: now() + 2)   // blur → auto-catch
+        #expect(try await focused(store, now() + 2) == ongoing)   // not `ended`
     }
 }
 

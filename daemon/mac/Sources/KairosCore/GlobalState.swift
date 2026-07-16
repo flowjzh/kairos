@@ -9,8 +9,10 @@ import Foundation
 /// meeting scheduled for a future start lights up only when its time arrives.
 /// afk and pause are independent spans and do not change the focused activity.
 ///
-/// The active-activity *set* is no longer derived here — it is the mutable
-/// `activities.state` column, read from the store (ADR 29).
+/// Only the focus pointer is derived here; the visible-activity *set* and its
+/// placement (Ongoing/Upcoming/Recent) are derived separately by `ActivityBuckets`
+/// (ADR 37). `activities.state` is a visibility flag (visible/archived), never
+/// timing; attribution never reads it (ADR 29).
 public struct GlobalState: Sendable, Equatable {
     public let afk: [Interval]
     public let pause: [Interval]

@@ -9,16 +9,22 @@ public actor Store {
     private let db: SQLiteConnection
     private var changeContinuation: AsyncStream<Void>.Continuation?
 
+    /// The live-state read window (ADR 37): `loadGlobalEvents(since:)` loads only
+    /// the last `liveWindow` seconds, so its cost is independent of total table
+    /// size. 30 d — large enough that a focus/afk/pause open longer than this is
+    /// pathological (the machine slept/restarted).
+    public static let liveWindow: Double = 30 * 86_400
+
     public init(path: String) throws {
         self.db = try SQLiteConnection(path: path)
         try self.db.migrate()
     }
 
-    // MARK: Change signal (event-driven menu refresh)
+    // MARK: Change signal (event-driven refresh)
 
-    /// A stream that yields once after every write, so the menu bar can refresh
-    /// on change instead of polling. One active consumer (the daemon); a new
-    /// call supersedes the previous stream.
+    /// A stream that yields after every write, so the menu bar can refresh on
+    /// change instead of polling. One active consumer (the daemon); a new call
+    /// supersedes the previous stream.
     public func changes() -> AsyncStream<Void> {
         let (stream, continuation) = AsyncStream<Void>.makeStream()
         changeContinuation = continuation
@@ -142,15 +148,15 @@ public actor Store {
     }
 
     /// Create-or-resume an activity (M4p3): idempotent on `(source, external_id)`.
-    /// A matching row (e.g. a `stopped` claude session being resumed by the same
-    /// `claude_sid`) is flipped back to `active` and returned; a NULL
+    /// A matching row (e.g. an `archived` claude session resumed by the same
+    /// `claude_sid`) is flipped back to `visible` and returned; a NULL
     /// `externalId` (menu/manual) always creates a new row. Writes **no event** —
-    /// timing is `focus`/`blur`, lifecycle is the mutable `state` column.
+    /// timing/placement is derived from `focus`/`blur`; `state` is just visibility.
     public func startActivity(source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws -> Int64 {
         let sourceId = try resolveSource(slug: source)
         let projectId = try project.map { try resolveProject(slug: $0) }
         if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
-            try setActivityState(activityId: existing, .active)
+            try setActivityState(activityId: existing, .visible)
             return existing
         }
         return try insertActivity(sourceId: sourceId, externalId: externalId, projectId: projectId, title: title, metadata: metadata)
@@ -169,9 +175,10 @@ public actor Store {
         throw StoreError.sqlite(message: "insert activity returned no row")
     }
 
-    /// Set an activity's lifecycle/visibility state (M4p3). Mutable, not
-    /// watermarked, never read by attribution — `activities.stop` sets `stopped`,
-    /// archiving sets `archived`.
+    /// Set an activity's visibility (`visible`/`archived`), ADR 37. Mutable, not
+    /// watermarked, never read by attribution — `activities.stop` archives an
+    /// exited session; archiving hides any activity. Placement is derived from
+    /// events, not this column.
     public func setActivityState(activityId: Int64, _ state: ActivityState) throws {
         let stmt = try db.prepare("UPDATE activities SET state=? WHERE id=?")
         try stmt.bind([.int(Int64(state.rawValue)), .int(activityId)])
@@ -181,7 +188,7 @@ public actor Store {
 
     /// Enrich a wrapper-created `pty` shell into an agent activity (Design B race
     /// fallback, M4p3): re-point its source/external_id/project/title/metadata and
-    /// mark it active. Keeps the id, so focus events already on the shell stay.
+    /// mark it visible. Keeps the id, so focus events already on the shell stay.
     public func enrichActivity(activityId: Int64, source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws {
         let sourceId = try resolveSource(slug: source)
         let projectId = try project.map { try resolveProject(slug: $0) }
@@ -192,7 +199,7 @@ public actor Store {
             projectId.map { .int($0) } ?? .null,
             title.map { .text($0) } ?? .null,
             try jsonTextValue(metadata),
-            .int(Int64(ActivityState.active.rawValue)),
+            .int(Int64(ActivityState.visible.rawValue)),
             .int(activityId),
         ])
         _ = try stmt.step()
@@ -220,8 +227,8 @@ public actor Store {
             try loadActivity(id: id).flatMap { $0.source != source ? id : nil }
         }
         if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
-            try setActivityState(activityId: existing, .active)
-            if let shell, shell != existing { try setActivityState(activityId: shell, .stopped) }
+            try setActivityState(activityId: existing, .visible)
+            if let shell, shell != existing { try setActivityState(activityId: shell, .archived) }
             return existing
         }
         if let shell {
@@ -431,11 +438,15 @@ public actor Store {
     }
 
     /// Only the events `GlobalState.reduce` consumes — `focus`/`blur` and the
-    /// global afk/pause spans. Callers that need just the focus pointer and
-    /// paused/afk state (menu refresh, auto-catch, the idle sampler) load this
-    /// instead of the full log, skipping the high-volume ai/override rows.
-    public func loadGlobalEvents() throws -> [Event] {
-        try queryEvents("\(Self.eventSelect) WHERE kind IN (\(Self.globalEventKinds)) ORDER BY id")
+    /// global afk/pause spans. `since` bounds the read to a recent window so the
+    /// cost is independent of total table size (`idx_events_ts` range scan); the
+    /// reducer's current-state answer is correct as long as no focus/afk/pause
+    /// span is open from before `since` (a month-long open span is pathological —
+    /// see ADR 37). Billing uses the full-range `loadEventsInRange`.
+    public func loadGlobalEvents(since: Double) throws -> [Event] {
+        // `ORDER BY ts` (not id) so `idx_events_ts` serves the `ts >= ?` range as an
+        // indexed SEARCH rather than a full SCAN; the reducer re-sorts by (ts, id).
+        try queryEvents("\(Self.eventSelect) WHERE kind IN (\(Self.globalEventKinds)) AND ts >= ? ORDER BY ts", [.double(since)])
     }
 
     /// All events with `ts <= to` (global and activity-scoped). Attribution
@@ -462,30 +473,17 @@ public actor Store {
         return Client(id: stmt.columnInt64(0), name: stmt.columnText(1) ?? "")
     }
 
-    /// Active activities (the live menu switch list). Since M4p3 this reads the
-    /// mutable `state` column, not derived open/close events. Manual activities
-    /// sort above auto ones.
-    public func activeActivities() throws -> [ActivityRecord] {
-        try queryActivities("\(Self.activitySelect) WHERE a.state = \(ActivityState.active.rawValue) ORDER BY s.manual DESC, a.id")
+    /// Visible (non-archived) activities — the menu base. Placement into
+    /// Ongoing/Upcoming/Recent is derived from the focus/blur log by
+    /// `ActivityBuckets`, not stored (ADR 37). Manual activities sort above auto.
+    public func visibleActivities() throws -> [ActivityRecord] {
+        try queryActivities("\(Self.activitySelect) WHERE a.state != \(ActivityState.archived.rawValue) ORDER BY s.manual DESC, a.id")
     }
 
-    /// Active **manual** (backdrop-eligible) activities — the auto-catch
-    /// fallback candidates when a foreground activity blurs (M4p3).
-    public func activeManualActivities() throws -> [ActivityRecord] {
-        try queryActivities("\(Self.activitySelect) WHERE a.state = \(ActivityState.active.rawValue) AND s.manual = 1 ORDER BY a.id")
-    }
-
-    /// **Stopped** manual activities — the *Recent Activities* list, ordered by
-    /// last time each was focused (most recent first). Active ones live in the
-    /// live switcher, archived ones are hidden — so starting one here removes it
-    /// from this list.
-    public func recentStoppedManualActivities() throws -> [ActivityRecord] {
-        try queryActivities("""
-            \(Self.activitySelect)
-            LEFT JOIN (SELECT activity_id, MAX(ts) lf FROM events WHERE kind=\(EventKind.focus.rawValue) GROUP BY activity_id) f ON f.activity_id = a.id
-            WHERE s.manual = 1 AND a.state = \(ActivityState.stopped.rawValue)
-            ORDER BY COALESCE(f.lf, 0) DESC, a.id DESC
-            """)
+    /// Visible **manual** activities — the auto-catch backdrop candidates (a
+    /// caller further filters to those still ongoing).
+    public func visibleManualActivities() throws -> [ActivityRecord] {
+        try queryActivities("\(Self.activitySelect) WHERE a.state != \(ActivityState.archived.rawValue) AND s.manual = 1 ORDER BY a.id")
     }
 
     // MARK: segments.get pipeline (store → attribution → resolved clients)

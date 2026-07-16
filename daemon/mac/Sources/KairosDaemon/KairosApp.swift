@@ -138,7 +138,7 @@ final class DaemonModel {
     private(set) var isPaused = false
     private(set) var isAfk = false
     private(set) var focusedId: Int64?
-    private(set) var activeActivities: [ActivityRecord] = []
+    private(set) var ongoingActivities: [ActivityRecord] = []
     private(set) var upcomingActivities: [ScheduledActivity] = []
     private(set) var manualTasks: [ActivityRecord] = []
     private(set) var clients: [Client] = []
@@ -188,7 +188,7 @@ final class DaemonModel {
             kairosSourceId = (try? await store.resolveSource(slug: DaemonSources.control)) ?? 0
         }
         let now = Date().timeIntervalSince1970
-        let events = (try? await store.loadGlobalEvents()) ?? []
+        let events = (try? await store.loadGlobalEvents(since: now - Store.liveWindow)) ?? []
         let state = GlobalState.reduce(events: events, to: now)
         let focused = state.focused
 
@@ -206,16 +206,14 @@ final class DaemonModel {
             menuLabel = "Kairos"
         }
 
-        // Section placement is time-derived (not the mutable `state` column), so a
-        // timed meeting stored `stopped` at creation still lands correctly:
-        // Upcoming (start ahead) / Active (running) / Recent (ended). See tests.
-        let (active, upcoming, recent) = ActivityBuckets.partition(
-            active: (try? await store.activeActivities()) ?? [],
-            stopped: (try? await store.recentStoppedManualActivities()) ?? [],
+        // Placement is fully derived from the focus/blur log (ADR 37): one visible
+        // list split into Ongoing / Upcoming / Recent. `state` is just visibility.
+        let (ongoing, upcoming, recent) = ActivityBuckets.partition(
+            visible: (try? await store.visibleActivities()) ?? [],
             events: events,
             now: now
         )
-        activeActivities = active
+        ongoingActivities = ongoing
         upcomingActivities = upcoming
         manualTasks = recent
         clients = (try? await store.listClients()) ?? []
@@ -228,9 +226,9 @@ final class DaemonModel {
         // tell the user we auto-switched to the planned task (issue 2).
         let maxFocusId = events.lazy.filter { $0.kind == .focus }.map(\.id).max() ?? 0
         if let focused, let prev = previousFocusedId, focused != prev, maxFocusId == lastFocusEventId {
-            // The just-started activity is in `active` by construction; fall back
+            // The just-started activity is in `ongoing` by construction; fall back
             // to a generic label rather than a store round-trip.
-            let title = active.first { $0.id == focused }?.title ?? "an activity"
+            let title = ongoing.first { $0.id == focused }?.title ?? "an activity"
             notify(NotificationContent(title: "Kairos", message: "Scheduled activity \"\(title)\" started — switched focus to it."))
         }
         previousFocusedId = focused
@@ -260,9 +258,9 @@ final class DaemonModel {
         await refresh()
     }
 
-    /// Start (or reactivate) a manual activity (M4p3): create-or-resume
-    /// the row (active) and write a `focus` at `start`. An end time writes a
-    /// `blur` and stops it; otherwise it stays the focused/active backdrop.
+    /// Start (or reactivate) a manual activity: create-or-resume the row, write a
+    /// `focus` at `start` (and a `blur` at `end` if timed). It is `visible`;
+    /// placement (Upcoming/Ongoing/Recent) is derived from the events (ADR 37).
     func startManualActivity(source: String, externalId: String?, title: String, project: String?, clientId: Int64?, afkImmune: Bool, start: Double, end: Double?) async {
         guard let id = try? await store.startActivity(source: source, externalId: externalId, project: project, title: title.isEmpty ? nil : title, metadata: nil) else { return }
         await sessions.setAfkImmune(id, afkImmune)
@@ -271,16 +269,15 @@ final class DaemonModel {
             try? await store.appendActivityEvent(activityId: id, kind: .activityOverride, ts: start, payload: payload)
         }
         try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: start)
-        if let end {
-            try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: end)
-            try? await store.setActivityState(activityId: id, .stopped)
-        }
+        if let end { try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: end) }
+        try? await store.setActivityState(activityId: id, .visible)
         await refresh()
     }
 
-    /// Reactivate a stopped manual activity by its id (focus it now).
+    /// Reactivate a Recent manual activity by its id: focus it now (it's already
+    /// visible; placement becomes Ongoing).
     func reactivate(_ id: Int64) async {
-        try? await store.setActivityState(activityId: id, .active)
+        try? await store.setActivityState(activityId: id, .visible)
         try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: Date().timeIntervalSince1970)
         await refresh()
     }
@@ -291,10 +288,10 @@ final class DaemonModel {
         await refresh()
     }
 
-    /// Stop (menu ✕): `blur` + state=stopped.
+    /// Stop (menu ✕): a `blur@now` ends it → derived Recent (still visible,
+    /// resumable). No `state` change — visibility is unaffected.
     func stopActivity(_ id: Int64) async {
         try? await store.appendActivityEvent(activityId: id, kind: .blur, ts: Date().timeIntervalSince1970)
-        try? await store.setActivityState(activityId: id, .stopped)
         await sessions.setAfkImmune(id, false)
         await refresh()
     }
@@ -363,9 +360,9 @@ private struct MenuContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            if !model.activeActivities.isEmpty {
+            if !model.ongoingActivities.isEmpty {
                 sectionLabel("Ongoing Activities")
-                ForEach(model.activeActivities, id: \.id) { a in
+                ForEach(model.ongoingActivities, id: \.id) { a in
                     HoverRow(onHover: { if $0 { flyout = nil } }) {
                         HStack(spacing: 8) {
                             // Left dot: green = focused, gray = not. Click to

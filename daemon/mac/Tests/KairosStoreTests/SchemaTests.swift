@@ -18,19 +18,19 @@ struct SchemaTests {
     }
 
     @Test
-    func schemaVersionIsOne() async throws {
+    func schemaVersionIsCurrent() async throws {
         let s = try store()
         let v = try await s.scalarInt("SELECT MAX(version) FROM schema_version")
-        #expect(v == 1)
+        #expect(v == 2)
     }
 
     @Test
     func reMigrateIsIdempotent() async throws {
         let s = try store()
         // Opening a second store on a fresh in-memory db runs migrate again;
-        // a no-op when already at v1 (no duplicate rows, version stays 1).
+        // a no-op when already current (one row per version).
         let v = try await s.scalarInt("SELECT COUNT(*) FROM schema_version")
-        #expect(v == 1)
+        #expect(v == 2)
     }
 
     @Test

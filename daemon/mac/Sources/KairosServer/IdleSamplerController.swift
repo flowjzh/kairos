@@ -99,7 +99,7 @@ public final class IdleSamplerController: @unchecked Sendable {
     /// True when the currently focused activity was started AFK-immune — the
     /// idle sampler then suppresses `afk_on` (ADR 33), so the log has no span.
     private func focusedIsAfkImmune(at ts: Double) async -> Bool {
-        guard let sessions, let events = try? await store.loadGlobalEvents(),
+        guard let sessions, let events = try? await store.loadGlobalEvents(since: ts - Store.liveWindow),
               let focused = GlobalState.reduce(events: events, to: ts).focused else { return false }
         return await sessions.isAfkImmune(focused)
     }

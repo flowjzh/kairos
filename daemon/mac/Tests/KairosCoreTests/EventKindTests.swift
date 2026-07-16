@@ -34,8 +34,8 @@ struct EventKindTests {
 
     @Test
     func activityStateSlugs() {
-        #expect(ActivityState.active.rawValue == 0)
-        #expect(ActivityState.stopped.slug == "stopped")
+        #expect(ActivityState.visible.rawValue == 0)
+        #expect(ActivityState.archived.slug == "archived")
         #expect(ActivityState(slug: "archived") == .archived)
     }
 }
