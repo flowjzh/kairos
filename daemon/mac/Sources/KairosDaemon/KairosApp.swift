@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import UserNotifications
 import KairosCore
@@ -75,6 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One instance per bundle id: if a login-launched copy collides with a
+        // manually-opened one (or two opens race), the newcomer exits before it
+        // binds the socket. dev/release differ by bundle id, so they still coexist.
+        let me = NSRunningApplication.current
+        let twin = NSRunningApplication.runningApplications(withBundleIdentifier: me.bundleIdentifier ?? "")
+            .contains { $0.processIdentifier != me.processIdentifier }
+        if twin { NSApp.terminate(nil); return }
+
         NSApp.setActivationPolicy(.accessory)
         let socketPath = paths.socketPath
         let spoolDir = paths.spoolDir
@@ -586,12 +595,101 @@ struct ActivityView: View {
     }
 }
 
+/// The app's "Launch at login" state via `SMAppService.mainApp` — the app itself
+/// as a login item. Registering fills the system's "Open at Login" / "Allow in the
+/// Background" entry; unregistering removes it cleanly (a bundled agent would also
+/// leave a parent *app* entry behind that `unregister()` can't reach).
+enum LoginItem {
+    private static var service: SMAppService { .mainApp }
+
+    static var isEnabled: Bool { service.status == .enabled }
+
+    /// Register / unregister the app as a login item. Returns nil on success, else
+    /// a short message to show — surfacing it beats a silent no-op when macOS wants
+    /// the user to approve the item.
+    static func setEnabled(_ on: Bool) -> String? {
+        do {
+            try on ? service.register() : service.unregister()
+            if on, service.status == .requiresApproval {
+                SMAppService.openSystemSettingsLoginItems()
+                return "Approve Kairos under Login Items to finish enabling."
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+}
+
+private enum ConfigSection: String, CaseIterable, Identifiable {
+    case general, clients, projects
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var icon: String {
+        switch self {
+        case .general: "gearshape"
+        case .clients: "person.2"
+        case .projects: "folder"
+        }
+    }
+}
+
 struct ConfigView: View {
     let model: DaemonModel
+    @State private var section: ConfigSection? = .general
+
+    var body: some View {
+        HStack(spacing: 0) {
+            List(selection: $section) {
+                ForEach(ConfigSection.allCases) { s in
+                    Label(s.title, systemImage: s.icon).tag(s)
+                }
+            }
+            .listStyle(.sidebar)
+            .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: 12) }
+            .frame(width: 180)
+            Divider()
+            detail.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(minWidth: 640, minHeight: 420)
+        .task { await model.refresh() }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch section ?? .general {
+        case .general: GeneralPane()
+        case .clients: ClientsPane(model: model)
+        case .projects: ProjectsPane(model: model)
+        }
+    }
+}
+
+private struct GeneralPane: View {
+    @State private var launchAtLogin = LoginItem.isEnabled
+    @State private var status: String?
+
+    var body: some View {
+        Form {
+            Section("Startup") {
+                // A custom binding (not `.onChange`) so re-reading the real state
+                // back into `launchAtLogin` can't re-fire the setter into a loop.
+                Toggle("Launch Kairos at login", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { on in
+                        status = LoginItem.setEnabled(on)
+                        launchAtLogin = LoginItem.isEnabled
+                    }
+                ))
+                if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct ClientsPane: View {
+    let model: DaemonModel
     @State private var addClientName = ""
-    @State private var mapProject: String?
-    @State private var mapClient: Int64?
-    @State private var mapBillable = true
 
     var body: some View {
         Form {
@@ -617,9 +715,23 @@ struct ConfigView: View {
                     .disabled(addClientName.isEmpty)
                 }
             }
+        }
+        .formStyle(.grouped)
+    }
+}
 
+private struct ProjectsPane: View {
+    let model: DaemonModel
+    @State private var mapProject: String?
+    @State private var mapClient: Int64?
+    @State private var mapBillable = true
+
+    var body: some View {
+        let bound = model.mappings.filter { $0.clientId != nil }
+        let boundSet = Set(bound.map(\.project))
+        let available = model.projects.filter { !boundSet.contains($0) }
+        Form {
             Section("Project → client") {
-                let bound = model.mappings.filter { $0.clientId != nil }
                 if bound.isEmpty {
                     Text("No client bindings yet — pick a project below to assign one.")
                         .foregroundStyle(.secondary)
@@ -637,7 +749,7 @@ struct ConfigView: View {
                 HStack {
                     Picker("Project", selection: $mapProject) {
                         Text("Select…").tag(String?.none)
-                        ForEach(model.projects, id: \.self) { Text($0).tag(String?.some($0)) }
+                        ForEach(available, id: \.self) { Text($0).tag(String?.some($0)) }
                     }
                     Picker("Client", selection: $mapClient) {
                         Text("None").tag(Int64?.none)
@@ -656,8 +768,6 @@ struct ConfigView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 480, minHeight: 360)
-        .task { await model.refresh() }
     }
 }
 

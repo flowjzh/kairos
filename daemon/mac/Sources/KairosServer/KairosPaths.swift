@@ -12,7 +12,7 @@ import Foundation
 ///
 /// A separate instance (the dev daemon) is just a different `$KAIROS_RUNTIME_DIR`
 /// / `$KAIROS_DATA_DIR` — supplied by the build/launch config (the dev app bakes
-/// them as `LSEnvironment`; the dev LaunchAgent as `EnvironmentVariables`), never
+/// them as `LSEnvironment`), never
 /// branched on in code. The env vars are also how the CLI/plugin/make target a
 /// given instance.
 public struct KairosPaths: Sendable, Equatable {

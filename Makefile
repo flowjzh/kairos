@@ -21,8 +21,7 @@ LABEL_DEV   := dev.kairos.daemon.dev
 PLUGIN_DIR  := plugins/claude-code
 
 # The dev instance's isolated dirs. Baked (as absolute paths) into the dev app's
-# LSEnvironment and the dev LaunchAgent's EnvironmentVariables at build/install
-# time — the ONLY place dev/release diverges. The running daemon just reads
+# LSEnvironment at build time — the ONLY place dev/release diverges. The running daemon just reads
 # $KAIROS_RUNTIME_DIR/$KAIROS_DATA_DIR (or the release defaults); it has no
 # dev/release branch.
 DEV_RUNTIME_DIR := $(HOME)/.kairos-dev
@@ -91,54 +90,56 @@ plugin: rust
 	@echo "  /plugin install kairos-claude-code@kairos"
 	@echo "Rebuilt the binary? Re-run this, then /plugin install again (or /reload-plugins)."
 
-# Install the release app + its (opt-in, unloaded) LaunchAgent + the shared CLI.
-# The daemon does NOT start here — run `make start` when you want it.
+# Install the release app + the shared CLI. The daemon does NOT start here — run
+# `make start`, or flip "Launch Kairos at login" in the app (SMAppService.mainApp
+# registers the app as a login item).
 install: app rust
 	rm -rf "$(INSTALL_APP)"
 	cp -R "$(APP)" "$(INSTALL_APP)"
-	cp Support/$(LABEL).plist $(AGENTS)/$(LABEL).plist
 	@mkdir -p $(HOME)/.local/bin
 	@ln -sf "$(CURDIR)/target/release/kairos" $(HOME)/.local/bin/kairos
 	@echo "Installed. Start on demand: make start"
 
-# Install the dev app + its (opt-in, unloaded) LaunchAgent. The agent gets the
-# dev dirs baked as EnvironmentVariables (launchd bypasses LaunchServices, so the
-# app's LSEnvironment doesn't apply here). Shares the one CLI + plugin binary.
+# Install the dev app. Its bundled LSEnvironment bakes the dev dirs
+# (KAIROS_RUNTIME_DIR / KAIROS_DATA_DIR), so login-launch and double-click alike
+# reach the dev instance. Shares the one CLI + plugin binary.
 install-dev: app-dev
 	rm -rf "$(INSTALL_DEV)"
 	cp -R "$(APP_DEV)" "$(INSTALL_DEV)"
-	cp Support/$(LABEL_DEV).plist $(AGENTS)/$(LABEL_DEV).plist
-	/usr/libexec/PlistBuddy \
-	  -c "Add :EnvironmentVariables dict" \
-	  -c "Add :EnvironmentVariables:KAIROS_RUNTIME_DIR string $(DEV_RUNTIME_DIR)" \
-	  -c "Add :EnvironmentVariables:KAIROS_DATA_DIR string $(DEV_DATA_DIR)" \
-	  $(AGENTS)/$(LABEL_DEV).plist
 	@echo "Installed dev. Start on demand: make start-dev (or make dev)"
 
-# On-demand start/stop via launchd (RunAtLoad=false, so nothing runs until here).
-# bootstrap registers the (unloaded) agent; kickstart -k force-(re)starts it.
+# On-demand start/stop by launching / SIGTERM-ing the installed app (a menu-bar
+# accessory). `open` propagates the calling shell's environment, so scrub KAIROS_*
+# first — otherwise a dev-configured shell would leak its dirs into the release
+# instance (both would target the dev DB). Release then falls back to its ~/.kairos
+# defaults; dev gets its dirs from the bundle's baked LSEnvironment either way.
+# The single-instance guard keeps a duplicate from a concurrent login-launch out;
+# SIGTERM triggers the graceful WAL checkpoint on the way down.
+SCRUB := env -u KAIROS_RUNTIME_DIR -u KAIROS_DATA_DIR -u KAIROS_SESSION_ID
+
 start:
-	-launchctl bootstrap gui/$(UID) $(AGENTS)/$(LABEL).plist
-	launchctl kickstart -k gui/$(UID)/$(LABEL)
+	$(SCRUB) open "$(INSTALL_APP)"
 
 stop:
-	-launchctl bootout gui/$(UID)/$(LABEL)
+	-pkill -f "$(INSTALL_APP)/Contents/MacOS/Kairos"
 
 start-dev:
-	-launchctl bootstrap gui/$(UID) $(AGENTS)/$(LABEL_DEV).plist
-	launchctl kickstart -k gui/$(UID)/$(LABEL_DEV)
+	$(SCRUB) open "$(INSTALL_DEV)"
 
 stop-dev:
-	-launchctl bootout gui/$(UID)/$(LABEL_DEV)
+	-pkill -f "$(INSTALL_DEV)/Contents/MacOS/Kairos"
 
 # Quick debug loop: rebuild the dev app and launch it (its bundle bakes the dev
 # dirs as LSEnvironment, so it uses the isolated dev instance). Logs go to unified
 # logging (Console.app / `log stream --predicate 'process == "Kairos"'`); for file
 # logs use `make start-dev` (writes /tmp/kairos-daemon-dev.log).
 dev: app-dev
-	open "$(APP_DEV)"
+	$(SCRUB) open "$(APP_DEV)"
 
 uninstall:
+	-pkill -f "$(INSTALL_APP)/Contents/MacOS/Kairos"
+	-pkill -f "$(INSTALL_DEV)/Contents/MacOS/Kairos"
+	# Legacy cleanup: older installs registered agents in ~/Library/LaunchAgents.
 	-launchctl bootout gui/$(UID)/$(LABEL)
 	-launchctl bootout gui/$(UID)/$(LABEL_DEV)
 	rm -f $(AGENTS)/$(LABEL).plist $(AGENTS)/$(LABEL_DEV).plist
