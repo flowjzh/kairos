@@ -23,7 +23,7 @@ A lean Swift macOS app (`LSUIElement = YES` — menu-bar only, no Dock icon), in
 - Ingest handlers append to `events` and return immediately — clients are never blocked (one request per connection).
 - Read handlers (`segments.get`, `snapshots.*`, `focused.get`) call the attribution library and return computed results — this is how non-Swift external consumers (via the SDK) and `kairos export` read.
 - Config handlers manage `clients` (mutable) and append to `project_client_map` (append-only).
-- On startup and periodically, **drains the spool** (`~/.kairos/spool/`) into `events`; `snapshots.create` and `export` trigger a drain first.
+- On startup, **drains the spool** (`~/.kairos/spool/`) into `events`; `snapshots.create` and `export` trigger a drain first.
 
 ### 3. Attribution library (`KairosCore`, daemon-internal)
 

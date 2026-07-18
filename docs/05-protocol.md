@@ -143,7 +143,7 @@ Reference SDKs ship in Swift (bundled with the daemon repo) and Python (for the 
 
 ## Resilience: spool fallback
 
-If the daemon socket is unavailable, `kairos event` / `kairos activity` append the JSON line to `~/.kairos/spool/<uuid>.jsonl` and exit 0. On startup and periodically the daemon **drains the spool** into `events` (appended in each event's own `ts` order), then removes the files. Fire-and-forget stays reliable across restarts with no client-side retry logic. (`snapshots.create` and `kairos export` drain first when the daemon is up.)
+If the daemon socket is unavailable, `kairos event` / `kairos activity` append the JSON line to `~/.kairos/spool/active.jsonl` (atomic `O_APPEND`; one request per line) and exit 0. When `active.jsonl` reaches the rotate threshold (1 MiB) it is renamed to a sealed `~/.kairos/spool/<uuid>.jsonl` and a new `active.jsonl` is started — this bounds file count (O(events / threshold)) and avoids the block-size waste of one file per request. On startup the daemon seals `active.jsonl` and **drains the spool**: every `*.jsonl` file is read line-by-line, replayed through the dispatcher in each event's own `ts` order, and deleted. Fire-and-forget stays reliable across restarts with no client-side retry logic. (`snapshots.create` and `kairos export` drain first when the daemon is up.)
 
 ## Guarantees & conventions
 

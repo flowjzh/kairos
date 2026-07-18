@@ -10,3 +10,4 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 kairos-codec = { path = "../codec" }
+tempfile = "3"
