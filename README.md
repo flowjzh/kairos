@@ -18,7 +18,7 @@ make install              # install Kairos.app + an opt-in LaunchAgent (not star
 make start                # start the release daemon on demand (make stop to stop)
 ```
 
-The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup. Both locations are overridable — `$KAIROS_RUNTIME_DIR` (socket + spool) and `$KAIROS_DATA_DIR` (store) — which is how the dev and release instances stay isolated (below).
+The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup. The runtime dir is overridable via `$KAIROS_RUNTIME_DIR` (socket + spool); the store path is baked into the app bundle (the daemon reads a `KairosDataDir` Info.plist key, defaulting to `~/Library/Application Support/Kairos`). This is how the dev and release instances stay isolated (below).
 
 ### Dev vs release
 
@@ -31,20 +31,18 @@ make dev                  # or: rebuild + open the dev app directly (quick debug
 make clean-dev            # wipe ONLY the dev runtime + DB — release is untouched
 ```
 
-The daemon code has no notion of "dev" — it just reads `$KAIROS_RUNTIME_DIR` / `$KAIROS_DATA_DIR` (or the release defaults). The dev/release difference lives entirely in the build: `make install-dev` bakes the `-dev` dirs into the dev app's `LSEnvironment` (for double-click / `make dev`) and its LaunchAgent's `EnvironmentVariables` (for `make start-dev`). To point *this repo's* Claude plugin + `kairos claude` at the dev daemon, set the two dirs for the session:
+The daemon code has no notion of "dev" — it reads `$KAIROS_RUNTIME_DIR` (runtime) and the bundle's `KairosDataDir` key (data), else the release defaults. The dev/release difference lives entirely in the build: `make install-dev` bakes the `-dev` dirs into the dev app's bundle (`KAIROS_RUNTIME_DIR` via `LSEnvironment`; the data dir as a `KairosDataDir` Info.plist key), so double-click / `make dev` / `make start-dev` all reach the dev instance. To point *this repo's* Claude plugin + `kairos claude` at the dev daemon, set the runtime dir for the session (the hook reads only `$KAIROS_RUNTIME_DIR` — it never touches the DB):
 
 ```jsonc
 // .claude/settings.local.json (gitignored) — routes direct `claude` here to dev
 { "env": {
-    "KAIROS_RUNTIME_DIR": "/Users/you/.kairos-dev",
-    "KAIROS_DATA_DIR": "/Users/you/Library/Application Support/Kairos-dev"
+    "KAIROS_RUNTIME_DIR": "/Users/you/.kairos-dev"
 } }
 ```
 
 ```sh
 # and export the same for `kairos claude` in a dev shell
 export KAIROS_RUNTIME_DIR=~/.kairos-dev
-export KAIROS_DATA_DIR=~/"Library/Application Support/Kairos-dev"
 ```
 
 Both LaunchAgents are opt-in (`RunAtLoad=false`): the daemon runs only when you `make start`. Flip `RunAtLoad` to `true` in the plist to autostart at login.

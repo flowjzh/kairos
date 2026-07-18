@@ -53,13 +53,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notificationDelegate: NotificationDelegate?
 
     override init() {
-        // One indirection point for socket/spool (runtime) + db (data), resolved
-        // purely from the environment. A separate instance (dev) is just a
-        // different `$KAIROS_RUNTIME_DIR`/`$KAIROS_DATA_DIR`, supplied by the
-        // build/launch config — never a dev/release branch in code.
+        // One indirection point for socket/spool (runtime) + db (data). Runtime
+        // is env-driven ($KAIROS_RUNTIME_DIR) so the non-bundle CLI/hook can
+        // target the same socket; the data dir is baked into this app's bundle
+        // (the KairosDataDir Info.plist key — the dev app sets it at build).
+        // No dev/release branch in code.
         let paths = KairosPaths(
             env: ProcessInfo.processInfo.environment,
-            home: FileManager.default.homeDirectoryForCurrentUser.path
+            home: FileManager.default.homeDirectoryForCurrentUser.path,
+            dataDir: Bundle.main.object(forInfoDictionaryKey: "KairosDataDir") as? String
         )
         self.paths = paths
         try? FileManager.default.createDirectory(atPath: paths.dataDir, withIntermediateDirectories: true)

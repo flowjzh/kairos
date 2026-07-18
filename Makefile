@@ -21,9 +21,10 @@ LABEL_DEV   := dev.kairos.daemon.dev
 PLUGIN_DIR  := plugins/claude-code
 
 # The dev instance's isolated dirs. Baked (as absolute paths) into the dev app's
-# LSEnvironment at build time — the ONLY place dev/release diverges. The running daemon just reads
-# $KAIROS_RUNTIME_DIR/$KAIROS_DATA_DIR (or the release defaults); it has no
-# dev/release branch.
+# bundle at build time — the ONLY place dev/release diverges. KAIROS_RUNTIME_DIR
+# stays env-driven (the non-bundle CLI/hook read it to target the socket); the
+# data dir is a KairosDataDir Info.plist key (only the daemon reads it). The
+# running daemon has no dev/release branch.
 DEV_RUNTIME_DIR := $(HOME)/.kairos-dev
 DEV_DATA_DIR    := $(HOME)/Library/Application Support/Kairos-dev
 
@@ -69,7 +70,7 @@ app-dev: build
 	/usr/libexec/PlistBuddy \
 	  -c "Add :LSEnvironment dict" \
 	  -c "Add :LSEnvironment:KAIROS_RUNTIME_DIR string $(DEV_RUNTIME_DIR)" \
-	  -c "Add :LSEnvironment:KAIROS_DATA_DIR string $(DEV_DATA_DIR)" \
+	  -c "Add :KairosDataDir string $(DEV_DATA_DIR)" \
 	  "$(APP_DEV)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP_DEV)/Contents/PkgInfo"
 	codesign --force --sign - "$(APP_DEV)"
@@ -100,22 +101,22 @@ install: app rust
 	@ln -sf "$(CURDIR)/target/release/kairos" $(HOME)/.local/bin/kairos
 	@echo "Installed. Start on demand: make start"
 
-# Install the dev app. Its bundled LSEnvironment bakes the dev dirs
-# (KAIROS_RUNTIME_DIR / KAIROS_DATA_DIR), so login-launch and double-click alike
-# reach the dev instance. Shares the one CLI + plugin binary.
+# Install the dev app. Its bundle bakes the dev dirs — KAIROS_RUNTIME_DIR in
+# LSEnvironment, the data dir as a KairosDataDir Info.plist key — so login-launch
+# and double-click alike reach the dev instance. Shares the one CLI + plugin.
 install-dev: app-dev
 	rm -rf "$(INSTALL_DEV)"
 	cp -R "$(APP_DEV)" "$(INSTALL_DEV)"
 	@echo "Installed dev. Start on demand: make start-dev (or make dev)"
 
 # On-demand start/stop by launching / SIGTERM-ing the installed app (a menu-bar
-# accessory). `open` propagates the calling shell's environment, so scrub KAIROS_*
-# first — otherwise a dev-configured shell would leak its dirs into the release
-# instance (both would target the dev DB). Release then falls back to its ~/.kairos
-# defaults; dev gets its dirs from the bundle's baked LSEnvironment either way.
-# The single-instance guard keeps a duplicate from a concurrent login-launch out;
-# SIGTERM triggers the graceful WAL checkpoint on the way down.
-SCRUB := env -u KAIROS_RUNTIME_DIR -u KAIROS_DATA_DIR -u KAIROS_SESSION_ID
+# accessory). `open` propagates the calling shell's environment, so scrub
+# KAIROS_RUNTIME_DIR first — otherwise a dev-configured shell would leak its
+# runtime dir into the release instance. The data dir is immune (bundle-baked,
+# not read from env). Release then falls back to its ~/.kairos default; dev gets
+# its dirs from the bundle either way. The single-instance guard keeps a duplicate
+# from a concurrent login-launch out; SIGTERM triggers the graceful WAL checkpoint.
+SCRUB := env -u KAIROS_RUNTIME_DIR -u KAIROS_SESSION_ID
 
 start:
 	$(SCRUB) open "$(INSTALL_APP)"
