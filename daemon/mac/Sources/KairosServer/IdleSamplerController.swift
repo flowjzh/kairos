@@ -12,7 +12,6 @@ import KairosStore
 public final class IdleSamplerController: @unchecked Sendable {
     private let store: Store
     private let sessions: SessionRegistry?
-    private let threshold: Double
     private let pollInterval: Double
     private let queue = DispatchQueue(label: "kairos.idle")
     private var state = IdleSampler.State()
@@ -20,17 +19,17 @@ public final class IdleSamplerController: @unchecked Sendable {
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
 
-    public init(store: Store, sessions: SessionRegistry? = nil, threshold: Double = 60, pollInterval: Double = 5) {
+    public init(store: Store, sessions: SessionRegistry? = nil, pollInterval: Double = 5) {
         self.store = store
         self.sessions = sessions
-        self.threshold = threshold
         self.pollInterval = pollInterval
     }
 
     public func start() async {
         let now = Date().timeIntervalSince1970
         let lastTs = try? await store.lastEventTs()
-        for transition in IdleSampler.startupGap(lastEventTs: lastTs, now: now, pollInterval: pollInterval) {
+        let lastAfkOpen = (try? await store.lastAfkEventKind()) == .afkOn
+        for transition in IdleSampler.startupGap(lastEventTs: lastTs, lastAfkOpen: lastAfkOpen, now: now, pollInterval: pollInterval) {
             await append(transition)
         }
 
@@ -63,7 +62,7 @@ public final class IdleSamplerController: @unchecked Sendable {
     private func poll() {
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
         let now = Date().timeIntervalSince1970
-        let (next, events) = IdleSampler.sample(state: state, idleSeconds: idle, now: now, threshold: threshold, pollInterval: pollInterval)
+        let (next, events) = IdleSampler.sample(state: state, idleSeconds: idle, now: now, threshold: AppSettings.idleThreshold, pollInterval: pollInterval)
         state = next
         for event in events { Task { await self.append(event) } }
     }

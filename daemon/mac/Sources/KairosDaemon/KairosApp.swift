@@ -84,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .contains { $0.processIdentifier != me.processIdentifier }
         if twin { NSApp.terminate(nil); return }
 
+        // Register setting defaults before any read (refresh/sampler read
+        // AppSettings): UserDefaults returns 0 for an unset key and grace 0 is a
+        // valid "off", so the registered default is the only "not yet set" signal.
+        AppSettings.register()
         NSApp.setActivationPolicy(.accessory)
         let socketPath = paths.socketPath
         let spoolDir = paths.spoolDir
@@ -147,6 +151,10 @@ final class DaemonModel {
     private(set) var isPaused = false
     private(set) var isAfk = false
     private(set) var focusedId: Int64?
+    /// An auto activity in its blur-grace window (light-green dot): a recent
+    /// blur to void no focus has followed yet. Refocus within grace absorbs the
+    /// blur; otherwise it stands once grace expires (ADR 39).
+    private(set) var gracePendingId: Int64?
     private(set) var ongoingActivities: [ActivityRecord] = []
     private(set) var upcomingActivities: [ScheduledActivity] = []
     private(set) var manualTasks: [ActivityRecord] = []
@@ -155,6 +163,11 @@ final class DaemonModel {
     private(set) var projects: [String] = []
     private var refreshTimer: Timer?
     private var refreshTask: Task<Void, Never>?
+    /// One-shot timer that re-renders exactly when an active grace expires —
+    /// the light-green→gray flip is time-driven (no store write at expiry), so
+    /// the event-driven refresh alone would leave a stale "refocus counts" cue.
+    private var graceTimer: Timer?
+    private var armedGraceExpiry: Double?
     /// Focus at the previous refresh — to detect a scheduled activity taking
     /// over the pointer as its start time arrives (issue 2).
     private var previousFocusedId: Int64?
@@ -191,15 +204,40 @@ final class DaemonModel {
         refreshTimer = timer
     }
 
+    /// Arm/cancel the one-shot grace-expiry timer. Re-armed only when the expiry
+    /// changes, so the 30s safety tick doesn't churn it while a grace is steady.
+    private func armGraceTimer(pending: Grace.Pending?, now: Double) {
+        let expiry = pending.map { $0.blurTs + AppSettings.grace }
+        guard expiry != armedGraceExpiry else { return }
+        graceTimer?.invalidate()
+        armedGraceExpiry = expiry
+        guard let expiry else { return }
+        let timer = Timer(timeInterval: max(0, expiry - now), repeats: false) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        graceTimer = timer
+    }
+
     func refresh() async {
         let now = Date().timeIntervalSince1970
         let events = (try? await store.loadGlobalEvents(since: now - Store.liveWindow)) ?? []
-        let state = GlobalState.reduce(events: events, to: now)
+        let visible = (try? await store.visibleActivities()) ?? []
+        // Manuals never get grace; the menu shows only visible activities, so the
+        // visible-manual set is the right gate here (billing excludes all manuals).
+        let manualIds = Set(visible.filter(\.manual).map(\.id))
+        // One absorbed view feeds the pointer, placement, and the grace-pending
+        // cue — so the menu can't drift from billing.
+        let view = Grace.absorbedView(events: events, grace: AppSettings.grace, manualIds: manualIds)
+        let state = GlobalState.reduce(events: view, to: now)
         let focused = state.focused
+        let pending = Grace.pending(events: view, to: now, grace: AppSettings.grace, manualIds: manualIds)
 
         isPaused = state.isPaused
         isAfk = state.isAfk
         focusedId = focused
+        gracePendingId = pending?.activityId
+        armGraceTimer(pending: pending, now: now)
 
         if isAfk {
             menuLabel = "Idle"
@@ -214,8 +252,8 @@ final class DaemonModel {
         // Placement is fully derived from the focus/blur log (ADR 37): one visible
         // list split into Ongoing / Upcoming / Recent. `state` is just visibility.
         let (ongoing, upcoming, recent) = ActivityBuckets.partition(
-            visible: (try? await store.visibleActivities()) ?? [],
-            events: events,
+            visible: visible,
+            events: view,
             now: now
         )
         ongoingActivities = ongoing
@@ -370,15 +408,19 @@ private struct MenuContent: View {
                 ForEach(model.ongoingActivities, id: \.id) { a in
                     HoverRow(onHover: { if $0 { flyout = nil } }) {
                         HStack(spacing: 8) {
-                            // Left dot: green = focused, gray = not. Click to
-                            // focus this activity — move the single pointer here.
-                            // (No un-focus: the pointer moves by focusing another,
-                            // or a manual one is removed with ✕.)
+                            // Left dot: green = focused, light green = in blur
+                            // grace (refocus to count the gap as focus), gray =
+                            // not. Click to focus this activity — move the single
+                            // pointer here. (No un-focus: the pointer moves by
+                            // focusing another, or a manual one is removed with ✕.)
                             Button { Task { await model.focusActivity(a.id) } } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: "circle.fill")
                                         .font(.system(size: 8))
-                                        .foregroundStyle(model.focusedId == a.id ? Color.green : Color.gray)
+                                        .foregroundStyle(
+                                            model.focusedId == a.id ? Color.green :
+                                            model.gracePendingId == a.id ? Color.green.opacity(0.4) :
+                                            Color.gray)
                                         .frame(width: iconColumn)
                                     Text(rowLabel(a)).lineLimit(1)
                                     Spacer(minLength: 4)
@@ -667,13 +709,15 @@ struct ConfigView: View {
 private struct GeneralPane: View {
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var status: String?
+    @AppStorage(AppSettings.graceKey) private var grace = AppSettings.defaultGrace
+    @AppStorage(AppSettings.idleThresholdKey) private var idleThreshold = AppSettings.defaultIdleThreshold
 
     var body: some View {
         Form {
             Section("Startup") {
                 // A custom binding (not `.onChange`) so re-reading the real state
                 // back into `launchAtLogin` can't re-fire the setter into a loop.
-                Toggle("Launch Kairos at login", isOn: Binding(
+                Toggle("Launch Kairos at Login", isOn: Binding(
                     get: { launchAtLogin },
                     set: { on in
                         status = LoginItem.setEnabled(on)
@@ -682,8 +726,54 @@ private struct GeneralPane: View {
                 ))
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
+            Section("Timer") {
+                TimerRow(
+                    title: "Blur Grace",
+                    explanation: "Count a brief blur as focus only if you return to the same auto activity within this many seconds — and nothing else is focused in between.",
+                    value: $grace, range: 0...600, step: 15)
+                TimerRow(
+                    title: "Idle Threshold",
+                    explanation: "Mark the session idle after this many seconds with no keyboard or mouse activity.",
+                    value: $idleThreshold, range: 15...600, step: 15)
+            }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// A tunable-number form row: the title and a small secondary explanation sit on
+/// the left, the editable value, its unit, and a stepper sit right-aligned. Typed
+/// values are clamped (rounded) into `range` so a stray entry can't escape bounds.
+private struct TimerRow: View {
+    let title: String
+    let explanation: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+
+    private var clamped: Binding<Double> {
+        Binding(get: { value }, set: { value = min(max(range.lowerBound, $0.rounded()), range.upperBound) })
+    }
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                Text(explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            // Labelless: a titled TextField would have its title hoisted into the
+            // form's label column (a stray middle column) alongside the VStack.
+            TextField(value: clamped, format: .number) { }
+                .multilineTextAlignment(.trailing)
+                .frame(width: 56)
+                .accessibilityLabel(title)
+            Stepper(value: $value, in: range, step: step) { }
+                .labelsHidden()
+        }
     }
 }
 
@@ -731,7 +821,7 @@ private struct ProjectsPane: View {
         let boundSet = Set(bound.map(\.project))
         let available = model.projects.filter { !boundSet.contains($0) }
         Form {
-            Section("Project → client") {
+            Section("Project → Client") {
                 if bound.isEmpty {
                     Text("No client bindings yet — pick a project below to assign one.")
                         .foregroundStyle(.secondary)

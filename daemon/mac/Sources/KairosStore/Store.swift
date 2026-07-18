@@ -132,6 +132,15 @@ public actor Store {
         return nil
     }
 
+    /// The kind of the most recent afk event, or nil if there is none. `.afkOn`
+    /// means a span is open (dangling) — used at startup to reconcile a kill that
+    /// left `afk_on` without its `afk_off`.
+    public func lastAfkEventKind() throws -> EventKind? {
+        let stmt = try db.prepare("SELECT kind FROM events WHERE kind IN (\(EventKind.afkOn.rawValue), \(EventKind.afkOff.rawValue)) ORDER BY id DESC LIMIT 1")
+        guard try stmt.step() else { return nil }
+        return EventKind(rawValue: Int(stmt.columnInt64(0)))
+    }
+
     public func mapWatermark() throws -> Int64 {
         try db.scalarInt("SELECT COALESCE(MAX(id), 0) FROM project_client_map")
     }
@@ -253,6 +262,16 @@ public actor Store {
         let stmt = try db.prepare("SELECT s.manual FROM activities a JOIN sources s ON s.id = a.source_id WHERE a.id=?")
         try stmt.bind([.int(activityId)])
         return try stmt.step() ? stmt.columnInt64(0) != 0 : false
+    }
+
+    /// Ids of all manual-source activities (visible or archived). Feeds grace's
+    /// `manualIds` gate so absorb/pending skip manuals — a manual's blur is an
+    /// intentional stop, never a grace-eligible excursion.
+    public func manualActivityIds() throws -> Set<Int64> {
+        let stmt = try db.prepare("SELECT a.id FROM activities a JOIN sources s ON s.id = a.source_id WHERE s.manual = 1")
+        var ids = Set<Int64>()
+        while try stmt.step() { ids.insert(stmt.columnInt64(0)) }
+        return ids
     }
 
     // MARK: Helpers
@@ -492,7 +511,13 @@ public actor Store {
     /// queries (not N+1), and optionally filter by project/client.
     public func attributedSegments(from: Double, to: Double, project: String? = nil, client: Int64? = nil) throws -> AttributedSegments {
         let events = try loadEventsInRange(from: from, to: to)
-        let computed = Attribution.compute(events: events, from: from, to: to)
+        // Absorb grace-eligible blurs before attribution (ADR 39): an auto
+        // activity's brief blur-to-void + same-activity re-focus within grace
+        // becomes one continuous span. Manuals are excluded via `manualIds`
+        // (all manuals — billing attributes archived activities too).
+        let manualIds = (try? manualActivityIds()) ?? []
+        let view = Grace.absorbedView(events: events, grace: AppSettings.grace, manualIds: manualIds)
+        let computed = Attribution.compute(events: view, from: from, to: to)
         let ids = Array(Set(computed.map(\.activityId)))
         let details = try resolveDetails(activityIds: ids)
 

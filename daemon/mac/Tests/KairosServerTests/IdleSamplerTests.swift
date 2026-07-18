@@ -118,13 +118,23 @@ struct IdleSamplerTests {
 
     @Test
     func startupGapEmitsOfflinePair() {
-        let events = IdleSampler.startupGap(lastEventTs: 100, now: 500, pollInterval: 5)
+        let events = IdleSampler.startupGap(lastEventTs: 100, lastAfkOpen: true, now: 500, pollInterval: 5)
         #expect(events == [.afkOn(reason: .offline, ts: 100), .afkOff(ts: 500)])
     }
 
     @Test
     func startupGapNoneWhenNoGap() {
-        #expect(IdleSampler.startupGap(lastEventTs: 100, now: 103, pollInterval: 5).isEmpty)
-        #expect(IdleSampler.startupGap(lastEventTs: nil, now: 500, pollInterval: 5).isEmpty)
+        #expect(IdleSampler.startupGap(lastEventTs: 100, lastAfkOpen: false, now: 103, pollInterval: 5).isEmpty)
+        #expect(IdleSampler.startupGap(lastEventTs: nil, lastAfkOpen: false, now: 500, pollInterval: 5).isEmpty)
+    }
+
+    @Test
+    func startupGapClosesDanglingAfkOnFastRestart() {
+        // A kill mid-afk left afk_on open; the fast restart has no down-gap, but
+        // the dangling span must still be closed (the fresh .none sampler won't).
+        #expect(IdleSampler.startupGap(lastEventTs: 100, lastAfkOpen: true, now: 103, pollInterval: 5)
+                == [.afkOff(ts: 103)])
+        // No gap and no dangling span → nothing.
+        #expect(IdleSampler.startupGap(lastEventTs: 100, lastAfkOpen: false, now: 103, pollInterval: 5).isEmpty)
     }
 }

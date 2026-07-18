@@ -105,6 +105,22 @@ import KairosStore
         try await pty(d, store, kid: "k1", focused: false, ts: now() + 2)   // blur → auto-catch
         #expect(try await focused(store, now() + 2) == ongoing)   // not `ended`
     }
+
+    @Test func resumedManualIsABackdropAgain() async throws {
+        // A manual that ended (focus+blur past) then was Resumed (a focus after
+        // the blur) is ongoing again → a valid catch target. The stale blur must
+        // not disqualify it (the bug: auto-catch used `lastBlur ≤ now` alone).
+        let d = Dispatcher()
+        let store = try Store(path: ":memory:")
+        let resumed = try await store.startActivity(source: "manual", externalId: nil, project: nil, title: "resumed", metadata: nil)
+        try await store.appendActivityEvent(activityId: resumed, kind: .focus, ts: now() - 200)
+        try await store.appendActivityEvent(activityId: resumed, kind: .blur, ts: now() - 100)
+        try await store.appendActivityEvent(activityId: resumed, kind: .focus, ts: now() - 10)   // Resume
+
+        try await pty(d, store, kid: "k1", focused: true, ts: now() + 1)
+        try await pty(d, store, kid: "k1", focused: false, ts: now() + 2)   // blur → auto-catch
+        #expect(try await focused(store, now() + 2) == resumed)
+    }
 }
 
 /// Sync-safe collector for the `notify` closure (which is synchronous).

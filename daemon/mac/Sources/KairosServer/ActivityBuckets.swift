@@ -24,7 +24,7 @@ public struct ScheduledActivity: Identifiable, Sendable, Equatable {
 public enum ActivityBuckets {
     /// Split the visible activities into Ongoing / Upcoming / Recent.
     /// - manual + earliest focus ahead → upcoming
-    /// - manual + last blur in the past → recent (ended)
+    /// - manual + last timing event a past blur (no focus after it) → recent
     /// - else → ongoing (manual backdrop/ongoing, or any visible auto)
     /// Upcoming is sorted by start; recent by last focus time.
     public static func partition(
@@ -41,7 +41,7 @@ public enum ActivityBuckets {
         for a in visible {
             if a.manual, let start = earliestFocus[a.id], start > now {
                 upcoming.append(ScheduledActivity(record: a, start: start))
-            } else if a.manual, let end = lastBlur[a.id], end <= now {
+            } else if a.manual, Self.isEnded(a.id, lastBlur: lastBlur, lastFocus: lastFocus, now: now) {
                 recent.append(a)
             } else {
                 ongoing.append(a)
@@ -65,6 +65,15 @@ public enum ActivityBuckets {
     /// most-recently-focused pick).
     static func lastFocus(events: [Event]) -> [Int64: Double] {
         extreme(events: events, kind: .focus, min: false)
+    }
+
+    /// A manual is ended (Recent) if its last timing event is a past blur —
+    /// started, blurred, and not re-focused since. One definition shared by
+    /// `partition` and the backdrop auto-catch filter, so the menu and the
+    /// catch agree on what's still an ongoing backdrop.
+    static func isEnded(_ id: Int64, lastBlur: [Int64: Double], lastFocus: [Int64: Double], now: Double) -> Bool {
+        guard let end = lastBlur[id], end <= now else { return false }
+        return end >= (lastFocus[id] ?? -.infinity)
     }
 
     /// Per-activity extreme `ts` of events of `kind` — the one fold behind

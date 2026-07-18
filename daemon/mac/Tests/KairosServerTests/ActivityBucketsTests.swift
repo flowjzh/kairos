@@ -47,6 +47,15 @@ import KairosStore
         #expect(r.ongoing.isEmpty && r.upcoming.isEmpty)
     }
 
+    @Test func resumedManualIsOngoingAgain() {
+        // ended (focus+blur past), then a Resume focus after the blur → Ongoing.
+        let r = ActivityBuckets.partition(
+            visible: [manual(8)],
+            events: [ev(1, 10, 8, .focus), ev(2, 50, 8, .blur), ev(3, 80, 8, .focus)], now: now)
+        #expect(r.ongoing.map(\.id) == [8])
+        #expect(r.recent.isEmpty)
+    }
+
     @Test func backdropWithoutEndIsOngoing() {
         // a live manual backdrop (focus past, no blur).
         let r = ActivityBuckets.partition(

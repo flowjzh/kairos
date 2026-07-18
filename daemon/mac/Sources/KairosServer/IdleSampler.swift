@@ -106,10 +106,19 @@ public enum IdleSampler {
         return (State(lastPoll: ts), [.afkOff(ts: ts)])
     }
 
-    /// Startup gap (daemon/machine was down): emit afk_on{offline}@lastEvent …
-    /// afk_off@now so the gap holes ai windows across it (M2). No-op if no gap.
-    public static func startupGap(lastEventTs: Double?, now: Double, pollInterval: Double) -> [IdleTransition] {
-        guard let last = lastEventTs, now - last > pollInterval else { return [] }
-        return [.afkOn(reason: .offline, ts: last), .afkOff(ts: now)]
+    /// Startup reconciliation (daemon/machine was down). Two jobs:
+    /// - **Gap fill:** a down-period longer than the poll interval is backfilled
+    ///   `afk_on{offline}@last … afk_off@now` so it holes ai windows across it.
+    /// - **Dangling afk_on:** a kill/crash mid-afk leaves the span open. The
+    ///   fresh sampler starts at `.none`, and `sample` only writes `afk_off` from
+    ///   `.idle` — so without closing it here the UI sticks on Idle (the next
+    ///   input doesn't help) until the next idle cycle's `afk_off` closes it.
+    ///   The gap fill already closes it; on a fast restart (no gap) close it
+    ///   explicitly via `lastAfkOpen`.
+    public static func startupGap(lastEventTs: Double?, lastAfkOpen: Bool, now: Double, pollInterval: Double) -> [IdleTransition] {
+        if let last = lastEventTs, now - last > pollInterval {
+            return [.afkOn(reason: .offline, ts: last), .afkOff(ts: now)]
+        }
+        return lastAfkOpen ? [.afkOff(ts: now)] : []
     }
 }

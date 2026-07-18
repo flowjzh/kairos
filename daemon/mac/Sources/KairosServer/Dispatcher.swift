@@ -190,7 +190,7 @@ public struct Dispatcher: Sendable {
         let lastFocus = ActivityBuckets.lastFocus(events: events)
         let backdrops = candidates.filter { a in
             let started = earliestFocus[a.id].map { $0 <= ts } ?? false
-            let ended = lastBlur[a.id].map { $0 <= ts } ?? false
+            let ended = ActivityBuckets.isEnded(a.id, lastBlur: lastBlur, lastFocus: lastFocus, now: ts)
             return started && !ended
         }
         guard !backdrops.isEmpty else { return }
