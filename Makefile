@@ -3,22 +3,43 @@
 
 # The Swift daemon lives under daemon/mac/; the Rust CLI/PTY + Claude Code hook
 # are the root Cargo workspace (libs/codec, libs/client, cli, plugins/claude-code).
-# BIN_* are the SwiftPM per-config symlinks (`.build/release`, `.build/debug`) — a
-# stable layout, so we avoid a `swift build --show-bin-path` shell-out on every
-# make invocation (it added ~1s even to targets that never build the daemon).
-SWIFT_PKG   := daemon/mac
-BIN_RELEASE := $(SWIFT_PKG)/.build/release
-BIN_DEBUG   := $(SWIFT_PKG)/.build/debug
-UID         := $(shell id -u)
+# BIN_* resolve the SwiftPM build dir directly from the target arch (below) instead
+# of a `swift build --show-bin-path` shell-out on every make invocation (~1s even
+# for targets that never build the daemon).
+# Target architecture: defaults to the host machine's arch (uname -m). Override to
+# cross-build for distribution — e.g. `make app ARCH=arm64` on an Intel Mac. A pure
+# arm64 build won't run on x86_64: use it to ship to an Apple-Silicon host, not to
+# run locally. SPM speaks arm64/x86_64 directly; Cargo wants a full triple and calls
+# arm64 `aarch64`, so map once and thread the flag through every native target.
+HOST_ARCH    := $(shell uname -m)
+ARCH         ?= $(HOST_ARCH)
+ifeq ($(ARCH),arm64)
+  RUST_TARGET := aarch64-apple-darwin
+else ifeq ($(ARCH),x86_64)
+  RUST_TARGET := x86_64-apple-darwin
+else
+  $(error Unsupported ARCH '$(ARCH)'; use arm64 or x86_64)
+endif
 
-APP         := build/Kairos.app
-APP_DEV     := build/Kairos Dev.app
-INSTALL_APP := /Applications/Kairos.app
-INSTALL_DEV := /Applications/Kairos Dev.app
-AGENTS      := $(HOME)/Library/LaunchAgents
-LABEL       := dev.kairos.daemon
-LABEL_DEV   := dev.kairos.daemon.dev
-PLUGIN_DIR  := plugins/claude-code
+SWIFT_PKG    := daemon/mac
+SWIFT_ARCH   := --arch $(ARCH)
+CARGO_ARCH   := --target $(RUST_TARGET)
+BIN_RELEASE  := $(SWIFT_PKG)/.build/$(ARCH)-apple-macosx/release
+BIN_DEBUG    := $(SWIFT_PKG)/.build/$(ARCH)-apple-macosx/debug
+BIN_KAIROS   := target/$(RUST_TARGET)/release/kairos
+BIN_HOOK     := target/$(RUST_TARGET)/hook/kairos-claude-code
+UID          := $(shell id -u)
+
+# Per-arch products so a cross-build never clobbers host artifacts.
+BUILD_DIR    := build/$(ARCH)
+APP          := $(BUILD_DIR)/Kairos.app
+APP_DEV      := $(BUILD_DIR)/Kairos Dev.app
+INSTALL_APP  := /Applications/Kairos.app
+INSTALL_DEV  := /Applications/Kairos Dev.app
+AGENTS       := $(HOME)/Library/LaunchAgents
+LABEL        := dev.kairos.daemon
+LABEL_DEV    := dev.kairos.daemon.dev
+PLUGIN_DIR   := plugins/claude-code
 
 # The dev instance's isolated dirs. Baked (as absolute paths) into the dev app's
 # bundle at build time — the ONLY place dev/release diverges. KAIROS_RUNTIME_DIR
@@ -29,23 +50,23 @@ DEV_RUNTIME_DIR := $(HOME)/.kairos-dev
 DEV_DATA_DIR    := $(HOME)/Library/Application Support/Kairos-dev
 
 build:
-	swift build --package-path $(SWIFT_PKG)
+	swift build --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
 
 # Build the shared release CLI (`kairos`) and the plugin hook binary. Each is built
 # once under its own profile: the CLI unwinds on panic (restoring the terminal from
 # raw mode), the hook aborts (no state to unwind → a smaller binary in target/hook).
 rust:
-	cargo build --release --bin kairos
-	cargo build --profile hook --bin kairos-claude-code
+	cargo build --release --bin kairos $(CARGO_ARCH)
+	cargo build --profile hook --bin kairos-claude-code $(CARGO_ARCH)
 
 test:
-	cargo test
-	swift test -c release --package-path $(SWIFT_PKG)
+	cargo test $(CARGO_ARCH)
+	swift test -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
 
 # Build the release .app: strip the binary (Rust already strips via the release
 # profile; this is the Swift half), stage the release Info.plist, ad-hoc sign.
 app:
-	swift build -c release --package-path $(SWIFT_PKG)
+	swift build -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS"
 	cp "$(BIN_RELEASE)/KairosDaemon" "$(APP)/Contents/MacOS/Kairos"
@@ -83,7 +104,7 @@ app-dev: build
 #   /plugin install kairos-claude-code@kairos
 plugin: rust
 	@mkdir -p $(PLUGIN_DIR)/bin
-	cp target/hook/kairos-claude-code $(PLUGIN_DIR)/bin/kairos-claude-code
+	cp $(BIN_HOOK) $(PLUGIN_DIR)/bin/kairos-claude-code
 	@echo
 	@echo "Staged $(PLUGIN_DIR)/bin/kairos-claude-code"
 	@echo "Formal install — run inside Claude Code:"
@@ -98,7 +119,7 @@ install: app rust
 	rm -rf "$(INSTALL_APP)"
 	cp -R "$(APP)" "$(INSTALL_APP)"
 	@mkdir -p $(HOME)/.local/bin
-	@ln -sf "$(CURDIR)/target/release/kairos" $(HOME)/.local/bin/kairos
+	@ln -sf "$(CURDIR)/$(BIN_KAIROS)" $(HOME)/.local/bin/kairos
 	@echo "Installed. Start on demand: make start"
 
 # Install the dev app. Its bundle bakes the dev dirs — KAIROS_RUNTIME_DIR in

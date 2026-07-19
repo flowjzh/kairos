@@ -13,6 +13,7 @@ Kairos is a local-first, macOS **human-time kernel**. It records the time you ar
 ```sh
 make test                 # Swift Testing suite (no Xcode required)
 make app                  # build + assemble Kairos.app (release, stripped, ad-hoc signed)
+make app ARCH=arm64       # cross-build for Apple Silicon → build/arm64/ (won't run on Intel)
 swift run KairosDaemon    # run the daemon directly — a menu-bar item appears
 make install              # install Kairos.app + an opt-in LaunchAgent (not started)
 make start                # start the release daemon on demand (make stop to stop)
