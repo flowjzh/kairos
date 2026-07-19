@@ -1,4 +1,4 @@
-.PHONY: build test app app-dev rust install install-dev uninstall \
+.PHONY: build test app app-dev cli rust install install-dev uninstall \
         start stop start-dev stop-dev dev plugin clean clean-dev
 
 # The Swift daemon lives under daemon/mac/; the Rust CLI/PTY + Claude Code hook
@@ -52,11 +52,15 @@ DEV_DATA_DIR    := $(HOME)/Library/Application Support/Kairos-dev
 build:
 	swift build --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
 
-# Build the shared release CLI (`kairos`) and the plugin hook binary. Each is built
-# once under its own profile: the CLI unwinds on panic (restoring the terminal from
-# raw mode), the hook aborts (no state to unwind → a smaller binary in target/hook).
-rust:
+# The shared release CLI (`kairos`), built once per arch. The release profile
+# unwinds on panic so the PTY wrapper can restore the terminal from raw mode.
+# A prerequisite of `app`/`app-dev` (bundled) and `install` (symlinked onto PATH).
+cli:
 	cargo build --release --bin kairos $(CARGO_ARCH)
+
+# The CLI plus the plugin hook binary. The hook aborts on panic (no state to
+# unwind → a smaller binary in target/hook).
+rust: cli
 	cargo build --profile hook --bin kairos-claude-code $(CARGO_ARCH)
 
 test:
@@ -65,7 +69,7 @@ test:
 
 # Build the release .app: strip the binary (Rust already strips via the release
 # profile; this is the Swift half), stage the release Info.plist, ad-hoc sign.
-app:
+app: cli
 	swift build -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS"
@@ -77,13 +81,18 @@ app:
 	plutil -lint Support/zh-Hans.lproj/Localizable.strings
 	cp -R Support/zh-Hans.lproj "$(APP)/Contents/Resources/zh-Hans.lproj"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
+	# The CLI ships inside the bundle (renamed to avoid a case-insensitive clash
+	# with the Kairos daemon exec); the user opts into a /usr/local/bin symlink
+	# via Configure. Ad-hoc sign the inner binary BEFORE sealing the bundle.
+	cp "$(BIN_KAIROS)" "$(APP)/Contents/MacOS/kairos-cli"
+	codesign --force --sign - "$(APP)/Contents/MacOS/kairos-cli"
 	codesign --force --sign - "$(APP)"
 
 # Build the dev .app: debug build (symbols kept, not stripped) + the dev
 # Info.plist (distinct bundle id/name). The dev dirs are baked in as
 # LSEnvironment so a double-click / `make dev` reaches the dev instance; the code
 # stays env-driven and dev-agnostic.
-app-dev: build
+app-dev: build cli
 	@rm -rf "$(APP_DEV)"
 	@mkdir -p "$(APP_DEV)/Contents/MacOS"
 	cp "$(BIN_DEBUG)/KairosDaemon" "$(APP_DEV)/Contents/MacOS/Kairos"
@@ -98,6 +107,10 @@ app-dev: build
 	  -c "Add :KairosDataDir string $(DEV_DATA_DIR)" \
 	  "$(APP_DEV)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP_DEV)/Contents/PkgInfo"
+	# Bundle the CLI here too (one build path; lets the in-app installer be tested
+	# against the dev app). Sign the inner binary before sealing the bundle.
+	cp "$(BIN_KAIROS)" "$(APP_DEV)/Contents/MacOS/kairos-cli"
+	codesign --force --sign - "$(APP_DEV)/Contents/MacOS/kairos-cli"
 	codesign --force --sign - "$(APP_DEV)"
 
 # Build the Claude Code hook binary and stage it into the plugin. The binary
@@ -119,7 +132,7 @@ plugin: rust
 # Install the release app + the shared CLI. The daemon does NOT start here — run
 # `make start`, or flip "Launch Kairos at login" in the app (SMAppService.mainApp
 # registers the app as a login item).
-install: app rust
+install: app
 	rm -rf "$(INSTALL_APP)"
 	cp -R "$(APP)" "$(INSTALL_APP)"
 	@mkdir -p $(HOME)/.local/bin

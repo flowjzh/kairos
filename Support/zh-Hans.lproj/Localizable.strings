@@ -42,6 +42,13 @@
 "Language" = "语言";
 "Changes apply on next launch." = "更改将在下次启动后生效。";
 
+/* General pane — command-line tool */
+"Command-Line Tool" = "命令行工具";
+"Install the `kairos` command to use it in any shell." = "安装 `kairos` 命令，即可在任意终端中使用。";
+"The `kairos` command is installed in /usr/local/bin." = "`kairos` 命令已安装到 /usr/local/bin。";
+"Install" = "安装";
+"Uninstall" = "卸载";
+
 /* Clients pane */
 "None" = "无";
 "New client" = "新客户端";

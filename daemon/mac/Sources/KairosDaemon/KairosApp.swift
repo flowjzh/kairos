@@ -665,6 +665,47 @@ enum LoginItem {
     }
 }
 
+/// The `kairos` CLI shipped inside the bundle (`Contents/MacOS/kairos-cli`),
+/// exposed on PATH via a symlink the user opts into. `/usr/local/bin` is on the
+/// default PATH, so the command works in every shell once linked; creating the
+/// symlink there needs root, hence the one AppleScript admin prompt.
+enum CLITool {
+    static let linkPath = "/usr/local/bin/kairos"
+    static var bundledPath: String { Bundle.main.bundlePath + "/Contents/MacOS/kairos-cli" }
+
+    /// Installed iff the symlink resolves to THIS bundle's binary — so the dev and
+    /// release apps each report only their own link, and a brew/other `kairos` reads
+    /// false (leaving it untouched).
+    static var isInstalled: Bool {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: linkPath)) == bundledPath
+    }
+
+    static func install() -> String? {
+        run("mkdir -p /usr/local/bin && ln -sf \(shq(bundledPath)) \(shq(linkPath))")
+    }
+    static func uninstall() -> String? { run("rm -f \(shq(linkPath))") }
+
+    /// Run a shell command with one admin prompt (SecurityAgent draws it). Returns
+    /// nil on success, else the error message. The prompt steals foreground from this
+    /// accessory app, so re-activate once it returns — repairs focus for both callers.
+    private static func run(_ shell: String) -> String? {
+        // Two nested layers to escape: the shell command sits inside an AppleScript
+        // string literal. `shell` is our own literal (no metachars); only the
+        // interpolated paths are quoted (via `sh`), so a path with `'` or `"` — a
+        // renamed .app under an apostrophe'd home — still links correctly.
+        let script = "do shell script \"\(shell.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
+        var err: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&err)
+        NSApp.activate(ignoringOtherApps: true)
+        return err?[NSAppleScript.errorMessage] as? String
+    }
+
+    /// Single-quote a path for `sh`, escaping any embedded `'` as `'\''`.
+    private static func shq(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 private enum ConfigSection: String, CaseIterable, Identifiable {
     case general, clients, projects
     var id: String { rawValue }
@@ -720,6 +761,8 @@ private struct GeneralPane: View {
     @AppStorage(AppSettings.graceKey) private var grace = AppSettings.defaultGrace
     @AppStorage(AppSettings.idleThresholdKey) private var idleThreshold = AppSettings.defaultIdleThreshold
     @State private var language = AppSettings.effectiveLanguage
+    @State private var cliInstalled = CLITool.isInstalled
+    @State private var cliStatus: String?
 
     var body: some View {
         Form {
@@ -734,6 +777,19 @@ private struct GeneralPane: View {
                     }
                 ))
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+            }
+            Section("Command-Line Tool") {
+                HStack {
+                    Text(cliInstalled
+                         ? "The `kairos` command is installed in /usr/local/bin."
+                         : "Install the `kairos` command to use it in any shell.")
+                    Spacer()
+                    Button(cliInstalled ? "Uninstall" : "Install") {
+                        cliStatus = cliInstalled ? CLITool.uninstall() : CLITool.install()
+                        cliInstalled = CLITool.isInstalled
+                    }
+                }
+                if let cliStatus { Text(cliStatus).font(.caption).foregroundStyle(.secondary) }
             }
             Section("Timer") {
                 TimerRow(

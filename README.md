@@ -21,6 +21,8 @@ make start                # start the release daemon on demand (make stop to sto
 
 The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup. The runtime dir is overridable via `$KAIROS_RUNTIME_DIR` (socket + spool); the store path is baked into the app bundle (the daemon reads a `KairosDataDir` Info.plist key, defaulting to `~/Library/Application Support/Kairos`). This is how the dev and release instances stay isolated (below).
 
+The `kairos` CLI ships inside `Kairos.app`; enable it on your shell PATH from **Configure → General → Command-Line Tool** (symlinks `/usr/local/bin/kairos`, one admin prompt). `make install` also links `~/.local/bin/kairos` to the repo build for local development.
+
 ### Dev vs release
 
 Develop against a **separate daemon, socket, and database** so wiping the dev DB never touches real freelance data — and run both instances at once:
