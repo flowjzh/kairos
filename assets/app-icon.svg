@@ -1,0 +1,170 @@
+<svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7CA6CE"/>
+      <stop offset="38%" stop-color="#5D84AC"/>
+      <stop offset="68%" stop-color="#2C5178"/>
+      <stop offset="100%" stop-color="#0F2544"/>
+    </linearGradient>
+
+    <radialGradient id="glossGrad" cx="50%" cy="18%" r="65%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="flagLight" x1="470.1" y1="393.9" x2="742.0" y2="258.0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F5872E"/>
+      <stop offset="100%" stop-color="#FFD37A"/>
+    </linearGradient>
+    <linearGradient id="flagDark" x1="606.1" y1="529.9" x2="742.0" y2="258.0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C9550F"/>
+      <stop offset="100%" stop-color="#F3862E"/>
+    </linearGradient>
+    <linearGradient id="bladeLight" x1="456.5" y1="483.7" x2="232.1" y2="767.9" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D3E1EC"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <linearGradient id="bladeDark" x1="516.3" y1="543.5" x2="232.1" y2="767.9" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#87A0B7"/>
+      <stop offset="100%" stop-color="#C3D3E1"/>
+    </linearGradient>
+    <linearGradient id="arcAccent" x1="607.3" y1="234.3" x2="786.4" y2="490.0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFD37A"/>
+      <stop offset="100%" stop-color="#FDD9A0"/>
+    </linearGradient>
+    <linearGradient id="rimGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E8F4FF" stop-opacity="0.9"/>
+      <stop offset="18%" stop-color="#9CC6E8" stop-opacity="0.42"/>
+      <stop offset="55%" stop-color="#3E6C93" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#061527" stop-opacity="0.5"/>
+    </linearGradient>
+
+    <filter id="dropShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="25.00"/>
+    </filter>
+    <filter id="dotGlow" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="5.38" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="needleShadow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="9.62" result="blur"/>
+      <feOffset in="blur" dx="3.85" dy="11.54" result="offsetBlur"/>
+      <feFlood flood-color="#030F1D" flood-opacity="0.55" result="shadowColor"/>
+      <feComposite in="shadowColor" in2="offsetBlur" operator="in" result="coloredShadow"/>
+      <feMerge>
+        <feMergeNode in="coloredShadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <clipPath id="iconClip">
+      <rect x="100.0" y="100.0" width="800" height="800" rx="173.08" ry="173.08"/>
+    </clipPath>
+  </defs>
+
+  <rect x="100.0" y="134.62" width="800" height="800" rx="173.08" ry="173.08"
+        fill="#04101F" opacity="0.42" filter="url(#dropShadow)"/>
+
+  <rect x="100.0" y="100.0" width="800" height="800" rx="173.08" ry="173.08"
+        fill="url(#bgGrad)"/>
+
+  <g clip-path="url(#iconClip)">
+    <rect x="100.0" y="100.0" width="800" height="800" fill="url(#glossGrad)"/>
+
+    <circle cx="500.0" cy="500.0" r="253.85" fill="none" stroke="#9CC0E0" stroke-width="4.81" opacity="0.30"/>
+
+    <path d="M 607.34,234.33 A 286.54 286.54 0 0 1 786.36,490.00" fill="none" stroke="url(#arcAccent)" stroke-width="6.15" stroke-linecap="round" opacity="0.55"/>
+
+    <circle cx="500.00" cy="213.46" r="7.79" fill="#548fb1" opacity="0.75"/>
+    <circle cx="530.12" cy="213.40" r="8.65" fill="#5e9ebd" opacity="0.84"/>
+    <circle cx="558.96" cy="222.63" r="6.23" fill="#43749a" opacity="0.60"/>
+    <circle cx="589.70" cy="223.94" r="9.75" fill="#f8c893" opacity="0.94"/>
+    <circle cx="615.01" cy="241.68" r="5.81" fill="#f0a25d" opacity="0.55"/>
+    <circle cx="644.81" cy="249.17" r="9.41" fill="#f7c58f" opacity="0.91"/>
+    <circle cx="667.36" cy="269.66" r="6.83" fill="#f2ac6b" opacity="0.66"/>
+    <circle cx="691.86" cy="286.92" r="7.89" fill="#f4b779" opacity="0.76"/>
+    <circle cx="714.03" cy="307.29" r="8.56" fill="#f6bd83" opacity="0.83"/>
+    <circle cx="729.51" cy="333.25" r="6.29" fill="#f1a763" opacity="0.60"/>
+    <circle cx="751.34" cy="354.89" r="9.72" fill="#f8c893" opacity="0.94"/>
+    <circle cx="758.29" cy="385.00" r="5.79" fill="#f0a25c" opacity="0.55"/>
+    <circle cx="775.56" cy="410.46" r="9.47" fill="#f8c68f" opacity="0.92"/>
+    <circle cx="778.33" cy="440.84" r="6.75" fill="#f2ab6a" opacity="0.65"/>
+    <circle cx="785.35" cy="470.01" r="7.99" fill="#f5b77b" opacity="0.77"/>
+    <circle cx="787.82" cy="500.00" r="8.46" fill="#f6bc81" opacity="0.82"/>
+    <circle cx="782.27" cy="529.67" r="6.37" fill="#f1a864" opacity="0.61"/>
+    <circle cx="783.81" cy="560.33" r="9.69" fill="#f8c892" opacity="0.94"/>
+    <circle cx="768.87" cy="587.36" r="5.78" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="764.79" cy="617.89" r="9.52" fill="#67adca" opacity="0.92"/>
+    <circle cx="746.29" cy="642.19" r="6.66" fill="#487ba0" opacity="0.64"/>
+    <circle cx="732.28" cy="668.76" r="8.09" fill="#5894b5" opacity="0.78"/>
+    <circle cx="713.76" cy="692.47" r="8.37" fill="#5b99b9" opacity="0.81"/>
+    <circle cx="690.01" cy="711.03" r="6.44" fill="#45789d" opacity="0.62"/>
+    <circle cx="670.51" cy="734.68" r="9.65" fill="#69afcc" opacity="0.93"/>
+    <circle cx="641.35" cy="744.82" r="5.77" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="617.93" cy="764.87" r="9.57" fill="#68aecb" opacity="0.93"/>
+    <circle cx="587.83" cy="770.32" r="6.58" fill="#477a9f" opacity="0.63"/>
+    <circle cx="559.73" cy="781.03" r="8.19" fill="#5996b7" opacity="0.79"/>
+    <circle cx="530.05" cy="785.88" r="8.27" fill="#5a97b8" opacity="0.80"/>
+    <circle cx="500.00" cy="784.12" r="6.52" fill="#46799e" opacity="0.62"/>
+    <circle cx="469.69" cy="788.42" r="9.61" fill="#68aecb" opacity="0.93"/>
+    <circle cx="441.22" cy="776.51" r="5.77" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="410.38" cy="775.83" r="9.62" fill="#68afcc" opacity="0.93"/>
+    <circle cx="384.45" cy="759.52" r="6.50" fill="#46799e" opacity="0.62"/>
+    <circle cx="356.25" cy="748.98" r="8.29" fill="#5a98b8" opacity="0.80"/>
+    <circle cx="331.15" cy="732.40" r="8.17" fill="#5895b6" opacity="0.79"/>
+    <circle cx="309.79" cy="711.25" r="6.60" fill="#477a9f" opacity="0.63"/>
+    <circle cx="284.55" cy="693.99" r="9.56" fill="#68aecb" opacity="0.93"/>
+    <circle cx="271.29" cy="666.17" r="5.77" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="248.76" cy="645.05" r="9.66" fill="#69afcc" opacity="0.94"/>
+    <circle cx="240.61" cy="615.49" r="6.42" fill="#45779d" opacity="0.61"/>
+    <circle cx="226.40" cy="588.90" r="8.39" fill="#5b99ba" opacity="0.81"/>
+    <circle cx="219.20" cy="559.69" r="8.07" fill="#5794b5" opacity="0.78"/>
+    <circle cx="217.13" cy="529.73" r="6.68" fill="#487ca0" opacity="0.64"/>
+    <circle cx="210.18" cy="500.00" r="9.51" fill="#67adca" opacity="0.92"/>
+    <circle cx="218.83" cy="470.45" r="5.78" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="216.17" cy="439.67" r="9.70" fill="#69b0cd" opacity="0.94"/>
+    <circle cx="230.10" cy="412.30" r="6.35" fill="#44769c" opacity="0.61"/>
+    <circle cx="237.02" cy="382.91" r="8.49" fill="#5c9bbb" opacity="0.82"/>
+    <circle cx="251.56" cy="356.56" r="7.97" fill="#5692b3" opacity="0.77"/>
+    <circle cx="269.76" cy="332.72" r="6.77" fill="#497da2" opacity="0.65"/>
+    <circle cx="284.70" cy="306.14" r="9.46" fill="#67acc9" opacity="0.92"/>
+    <circle cx="310.81" cy="289.88" r="5.79" fill="#3e6c93" opacity="0.55"/>
+    <circle cx="329.41" cy="265.20" r="9.73" fill="#6ab0cd" opacity="0.94"/>
+    <circle cx="358.17" cy="254.34" r="6.28" fill="#44759a" opacity="0.60"/>
+    <circle cx="382.84" cy="236.85" r="8.58" fill="#5d9dbc" opacity="0.83"/>
+    <circle cx="411.41" cy="227.35" r="7.87" fill="#5590b2" opacity="0.76"/>
+    <circle cx="440.79" cy="221.46" r="6.86" fill="#4a7fa3" opacity="0.66"/>
+    <circle cx="469.73" cy="211.99" r="9.40" fill="#66abc8" opacity="0.91"/>
+    <circle cx="500.00" cy="213.46" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="643.27" cy="251.85" r="13.85" fill="#FFEFC4" filter="url(#dotGlow)"/>
+    <circle cx="748.15" cy="356.73" r="13.85" fill="#FFEFC4" filter="url(#dotGlow)"/>
+    <circle cx="786.54" cy="500.00" r="13.85" fill="#FFEFC4" filter="url(#dotGlow)"/>
+    <circle cx="748.15" cy="643.27" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="643.27" cy="748.15" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="500.00" cy="786.54" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="356.73" cy="748.15" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="251.85" cy="643.27" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="213.46" cy="500.00" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="251.85" cy="356.73" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+    <circle cx="356.73" cy="251.85" r="13.85" fill="#8FEBFF" filter="url(#dotGlow)"/>
+
+    
+    <g filter="url(#needleShadow)">
+    <polygon points="742.05,257.95 470.08,393.93 500.00,500.00" fill="url(#flagLight)" stroke="url(#flagLight)" stroke-width="1.54" stroke-linejoin="round"/>
+    <polygon points="742.05,257.95 500.00,500.00 606.07,529.92" fill="url(#flagDark)" stroke="url(#flagDark)" stroke-width="1.54" stroke-linejoin="round"/>
+    <polygon points="232.12,767.88 456.49,483.68 500.00,500.00" fill="url(#bladeLight)" stroke="url(#bladeLight)" stroke-width="1.54" stroke-linejoin="round"/>
+    <polygon points="232.12,767.88 500.00,500.00 516.32,543.51" fill="url(#bladeDark)" stroke="url(#bladeDark)" stroke-width="1.54" stroke-linejoin="round"/>
+    </g>
+
+
+    <rect x="103.85" y="103.85" width="792.31" height="115.38" rx="169.23"
+          fill="url(#glossGrad)" opacity="0.5"/>
+  </g>
+
+  <rect x="102.88" y="102.88" width="794.23" height="794.23" rx="170.19" ry="170.19"
+        fill="none" stroke="url(#rimGrad)" stroke-width="6.15"/>
+</svg>
