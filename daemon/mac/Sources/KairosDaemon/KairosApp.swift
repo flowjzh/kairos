@@ -242,9 +242,9 @@ final class DaemonModel {
         armGraceTimer(pending: pending, now: now)
 
         if isAfk {
-            menuLabel = "Idle"
+            menuLabel = NSLocalizedString("Idle", comment: "")
         } else if isPaused {
-            menuLabel = "Paused"
+            menuLabel = NSLocalizedString("Paused", comment: "")
         } else if let focused, let record = try? await store.loadActivity(id: focused) {
             menuLabel = record.title ?? record.project ?? record.source
         } else {
@@ -273,8 +273,8 @@ final class DaemonModel {
         if let focused, let prev = previousFocusedId, focused != prev, maxFocusId == lastFocusEventId {
             // The just-started activity is in `ongoing` by construction; fall back
             // to a generic label rather than a store round-trip.
-            let title = ongoing.first { $0.id == focused }?.title ?? "an activity"
-            notify(NotificationContent(title: "Kairos", message: "Scheduled activity \"\(title)\" started — switched focus to it."))
+            let title = ongoing.first { $0.id == focused }?.title ?? NSLocalizedString("an activity", comment: "")
+            notify(NotificationContent(title: "Kairos", message: String(format: NSLocalizedString("Scheduled activity \"%@\" started — switched focus to it.", comment: ""), title)))
         }
         previousFocusedId = focused
         lastFocusEventId = maxFocusId
@@ -457,7 +457,7 @@ private struct MenuContent: View {
                                     .font(.system(size: 9))
                                     .foregroundStyle(.secondary)
                                     .frame(width: iconColumn)
-                                Text(u.record.title ?? "Activity").lineLimit(1)
+                                Text(u.record.title ?? NSLocalizedString("Activity", comment: "")).lineLimit(1)
                                 Spacer(minLength: 4)
                                 Text(scheduleLabel(u.start)).font(.caption).foregroundStyle(.tertiary)
                             }
@@ -481,7 +481,7 @@ private struct MenuContent: View {
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                                 .frame(width: iconColumn)
-                            Text(t.title ?? "Activity").lineLimit(1)
+                            Text(t.title ?? NSLocalizedString("Activity", comment: "")).lineLimit(1)
                             Spacer(minLength: 4)
                             Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
                         }
@@ -523,7 +523,7 @@ private struct MenuContent: View {
         .presentationBackground { VisualEffect() }
     }
 
-    private func flyoutRow(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+    private func flyoutRow(_ title: LocalizedStringKey, _ icon: String, _ action: @escaping () -> Void) -> some View {
         HoverRow {
             Button(action: action) {
                 HStack(spacing: 8) {
@@ -540,7 +540,7 @@ private struct MenuContent: View {
         Binding(get: { flyout == id }, set: { if !$0 && flyout == id { flyout = nil } })
     }
 
-    private func sectionLabel(_ title: String) -> some View {
+    private func sectionLabel(_ title: LocalizedStringKey) -> some View {
         Text(title).font(.caption).foregroundStyle(.tertiary)
             .padding(.horizontal, 10).padding(.top, 3).padding(.bottom, 1)
     }
@@ -554,7 +554,7 @@ private struct MenuContent: View {
             : date.formatted(.dateTime.month(.abbreviated).day()) + " " + time
     }
 
-    private func actionRow(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+    private func actionRow(_ title: LocalizedStringKey, _ icon: String, _ action: @escaping () -> Void) -> some View {
         HoverRow(onHover: { if $0 { flyout = nil } }) {
             Button(action: action) {
                 HStack(spacing: 5) {
@@ -572,7 +572,7 @@ private struct MenuContent: View {
     /// `<source display name> - <suffix>`, where the suffix is the project if set,
     /// else the command (e.g. a `pty` `ssh beth` → "Terminal - ssh beth").
     private func rowLabel(_ a: ActivityRecord) -> String {
-        if a.manual { return a.title ?? a.project ?? "Activity" }
+        if a.manual { return a.title ?? a.project ?? NSLocalizedString("Activity", comment: "") }
         if let suffix = a.project ?? a.title, !suffix.isEmpty { return "\(a.displayName) - \(suffix)" }
         return a.displayName
     }
@@ -656,7 +656,7 @@ enum LoginItem {
             try on ? service.register() : service.unregister()
             if on, service.status == .requiresApproval {
                 SMAppService.openSystemSettingsLoginItems()
-                return "Approve Kairos under Login Items to finish enabling."
+                return NSLocalizedString("Approve Kairos under Login Items to finish enabling.", comment: "")
             }
             return nil
         } catch {
@@ -668,7 +668,13 @@ enum LoginItem {
 private enum ConfigSection: String, CaseIterable, Identifiable {
     case general, clients, projects
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: LocalizedStringKey {
+        switch self {
+        case .general: "General"
+        case .clients: "Clients"
+        case .projects: "Projects"
+        }
+    }
     var icon: String {
         switch self {
         case .general: "gearshape"
@@ -713,6 +719,7 @@ private struct GeneralPane: View {
     @State private var status: String?
     @AppStorage(AppSettings.graceKey) private var grace = AppSettings.defaultGrace
     @AppStorage(AppSettings.idleThresholdKey) private var idleThreshold = AppSettings.defaultIdleThreshold
+    @State private var language = AppSettings.effectiveLanguage
 
     var body: some View {
         Form {
@@ -738,6 +745,21 @@ private struct GeneralPane: View {
                     explanation: "Mark the session idle after this many seconds with no keyboard or mouse activity.",
                     value: $idleThreshold, range: 15...600, step: 15)
             }
+            Section("Language") {
+                // Native i18n: the Picker writes `AppleLanguages` (the single source —
+                // persisted across restarts); Bundle.main only re-resolves on the next
+                // launch, so `language` diverges from the launch snapshot until then.
+                Picker("Language", selection: $language) {
+                    Text(verbatim: "English").tag("en")
+                    Text(verbatim: "简体中文").tag("zh-Hans")
+                }
+                .onChange(of: language) { _, new in
+                    UserDefaults.standard.set([new], forKey: "AppleLanguages")
+                }
+                if language != AppSettings.launchLanguage {
+                    Text("Changes apply on next launch.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -747,8 +769,8 @@ private struct GeneralPane: View {
 /// the left, the editable value, its unit, and a stepper sit right-aligned. Typed
 /// values are clamped (rounded) into `range` so a stray entry can't escape bounds.
 private struct TimerRow: View {
-    let title: String
-    let explanation: String
+    let title: LocalizedStringKey
+    let explanation: LocalizedStringKey
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step: Double

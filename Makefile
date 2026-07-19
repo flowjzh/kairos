@@ -74,6 +74,8 @@ app:
 	cp Support/Info.plist "$(APP)/Contents/Info.plist"
 	@mkdir -p "$(APP)/Contents/Resources"
 	cp Support/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
+	plutil -lint Support/zh-Hans.lproj/Localizable.strings
+	cp -R Support/zh-Hans.lproj "$(APP)/Contents/Resources/zh-Hans.lproj"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	codesign --force --sign - "$(APP)"
 
@@ -88,6 +90,8 @@ app-dev: build
 	cp Support/Info-Dev.plist "$(APP_DEV)/Contents/Info.plist"
 	@mkdir -p "$(APP_DEV)/Contents/Resources"
 	cp Support/AppIcon.icns "$(APP_DEV)/Contents/Resources/AppIcon.icns"
+	plutil -lint Support/zh-Hans.lproj/Localizable.strings
+	cp -R Support/zh-Hans.lproj "$(APP_DEV)/Contents/Resources/zh-Hans.lproj"
 	/usr/libexec/PlistBuddy \
 	  -c "Add :LSEnvironment dict" \
 	  -c "Add :LSEnvironment:KAIROS_RUNTIME_DIR string $(DEV_RUNTIME_DIR)" \

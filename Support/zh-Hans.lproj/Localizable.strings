@@ -1,0 +1,70 @@
+/* Kairos — Simplified Chinese (zh-Hans).
+   Keys are the English source literals, so bare SwiftUI Text("…") literals
+   auto-resolve; English is served by CFBundleDevelopmentRegion + missing-key
+   fallback (no en.lproj). */
+
+/* Menu — sections, tags, tooltips, actions */
+"Ongoing Activities" = "进行中的活动";
+"Upcoming Activities" = "即将开始的活动";
+"Recent Activities" = "最近的活动";
+"auto" = "自动";
+"Stop" = "停止";
+"Cancel" = "取消";
+"New Activity…" = "新建活动…";
+"Configure…" = "设置…";
+"Resume" = "继续";
+"Pause" = "暂停";
+"Quit Kairos" = "退出 Kairos";
+"Archive" = "归档";
+
+/* Menu — row fallbacks, model label */
+"Activity" = "活动";
+"an activity" = "一个活动";
+"Idle" = "空闲";
+"Paused" = "已暂停";
+
+/* Window + sidebar titles */
+"New Activity" = "新建活动";
+"Configure" = "设置";
+"General" = "通用";
+"Clients" = "客户端";
+"Projects" = "项目";
+
+/* General pane */
+"Startup" = "启动";
+"Launch Kairos at Login" = "登录时启动 Kairos";
+"Approve Kairos under Login Items to finish enabling." = "请在“登录项”中批准 Kairos 以完成启用。";
+"Timer" = "计时器";
+"Blur Grace" = "失焦宽限";
+"Count a brief blur as focus only if you return to the same auto activity within this many seconds — and nothing else is focused in between." = "仅当你在该秒数内返回同一自动活动、且期间没有其他活动获得焦点时，才将短暂的失焦计为专注。";
+"Idle Threshold" = "空闲阈值";
+"Mark the session idle after this many seconds with no keyboard or mouse activity." = "当键盘与鼠标无操作达到该秒数后，将会话标记为空闲。";
+"Language" = "语言";
+"Changes apply on next launch." = "更改将在下次启动后生效。";
+
+/* Clients pane */
+"None" = "无";
+"New client" = "新客户端";
+"Add" = "添加";
+
+/* Projects pane */
+"Project → Client" = "项目 → 客户端";
+"No client bindings yet — pick a project below to assign one." = "尚未绑定客户端——在下方选择一个项目来分配。";
+"non-bill" = "不计费";
+"Unbind" = "解绑";
+"Project" = "项目";
+"Select…" = "选择…";
+"Client" = "客户端";
+"Billable" = "可计费";
+"Set" = "设置";
+
+/* New Activity window */
+"Title" = "标题";
+"AFK detection off (passive work)" = "关闭 AFK 检测（被动工作）";
+"Start" = "开始";
+"End" = "结束";
+"Ongoing" = "进行中";
+
+/* Notifications (parametrized) */
+"Scheduled activity \"%@\" started — switched focus to it." = "定时活动“%@”已开始——已将焦点切换到它。";
+"Multiple active activities — focus switched to %@" = "存在多个活跃活动——已将焦点切换到 %@";

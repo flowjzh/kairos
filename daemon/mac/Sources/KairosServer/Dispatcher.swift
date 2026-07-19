@@ -197,8 +197,8 @@ public struct Dispatcher: Sendable {
         let targetId = backdrops.map(\.id).max(by: { (lastFocus[$0] ?? -.infinity) < (lastFocus[$1] ?? -.infinity) }) ?? backdrops.last!.id
         try await store.appendActivityEvent(activityId: targetId, kind: .focus, ts: ts)
         if backdrops.count > 1 {
-            let title = backdrops.first { $0.id == targetId }?.title ?? "an activity"
-            notify(NotificationContent(title: "Kairos", message: "Multiple active activities — focus switched to \(title)"))
+            let title = backdrops.first { $0.id == targetId }?.title ?? NSLocalizedString("an activity", comment: "")
+            notify(NotificationContent(title: "Kairos", message: String(format: NSLocalizedString("Multiple active activities — focus switched to %@", comment: ""), title)))
         }
     }
 
