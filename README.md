@@ -82,6 +82,30 @@ The formal install copies the plugin (binary included) into Claude's own cache �
 Each session auto-appears as a project (its cwd basename); tag that project's client once in **Configure…** and it applies retroactively. Human-work time (reading, thinking, prompting between the agent stopping and your next submit) is attributed to the session; AI-execution time is excluded.
 
 
+## Dashboard
+
+**Dashboard…** (menu bar) opens a window over your attributed time: a per-source timeline (each source a translucent area, with the total overlaid as a line) above two tabs — raw segments (paged) and a client → project summary tree. The range picker (Today / This Week / This Month / Custom) drives one in-process attribution pass, memoized so the chart, summary, and paged rows share it.
+
+The data plane is cross-platform: a pure Rust reducer (`libs/report`) folds already-attributed segments into the chart/summary/page shapes, surfaced to the Swift daemon through one general C-ABI boundary (`ffi/` → `libkairos_ffi.a`). The rendering is a Vite + React + shadcn web app (`dashboard/`) hosted in a WKWebView; the same web bundle + reducer are reused unchanged when a Windows host (`wry`/Tauri) is added later.
+
+**Front-end dev loop** (HMR, no re-bundle): the dashboard's default URL is the bundled `kairos://dashboard/index.html`, so it always renders. To debug against the Vite dev server instead, set `KAIROS_DASHBOARD_URL` and launch the binary directly (launching the binary — not `open` — is what lets the env reach the process). Works for whichever bundle's data you want to debug:
+
+```sh
+cd dashboard && pnpm install && pnpm dev    # Vite at http://localhost:5173
+
+# Debug the dev bundle (reads ~/.kairos-dev data). KAIROS_RUNTIME_DIR keeps the
+# dev socket/spool isolated when launching the binary directly (normally baked
+# into the bundle's LSEnvironment, which only `open` applies).
+KAIROS_DASHBOARD_URL=http://localhost:5173 KAIROS_RUNTIME_DIR=~/.kairos-dev \
+  "build/$(uname -m)/Kairos Dev.app/Contents/MacOS/Kairos"
+
+# Or the release bundle (reads the real ~/.kairos data):
+KAIROS_DASHBOARD_URL=http://localhost:5173 /Applications/Kairos.app/Contents/MacOS/Kairos
+```
+
+The dev app's WKWebView is inspectable: Safari → Develop → [machine] → Kairos (Dev) → Dashboard.
+
+
 ## Architecture in one breath
 
 ```

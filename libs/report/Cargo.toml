@@ -1,0 +1,8 @@
+[package]
+name = "kairos-report"
+version.workspace = true
+edition.workspace = true
+description = "Pure read-time reducer: attributed segments → dashboard timeline / client-project summary / paged rows"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,5 @@
+module CKairosFFI {
+    header "KairosFFI.h"
+    link "kairos_ffi"
+    export *
+}

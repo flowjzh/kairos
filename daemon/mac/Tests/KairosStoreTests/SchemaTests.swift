@@ -21,7 +21,7 @@ struct SchemaTests {
     func schemaVersionIsCurrent() async throws {
         let s = try store()
         let v = try await s.scalarInt("SELECT MAX(version) FROM schema_version")
-        #expect(v == 3)
+        #expect(v == 4)
     }
 
     @Test
@@ -30,7 +30,18 @@ struct SchemaTests {
         // Opening a second store on a fresh in-memory db runs migrate again;
         // a no-op when already current (one row per version).
         let v = try await s.scalarInt("SELECT COUNT(*) FROM schema_version")
-        #expect(v == 3)
+        #expect(v == 4)
+    }
+
+    @Test
+    func builtinSourcesSeededWithDisplayName() async throws {
+        let s = try store()
+        let rows = try await s.queryStrings(
+            "SELECT slug || '=' || display_name FROM sources WHERE slug IN ('manual','pty') ORDER BY slug"
+        )
+        // Non-empty, non-slug display names (exact label depends on test locale).
+        #expect(rows.count == 2)
+        #expect(rows.allSatisfy { $0.contains("=") && !$0.hasSuffix("=manual") })
     }
 
     @Test

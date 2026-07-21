@@ -11,6 +11,16 @@ let package = Package(
         // System libsqlite3 wrapper (stay-native; no third-party SQLite dependency).
         .systemLibrary(name: "CSQLite", path: "Sources/CSQLite"),
 
+        // C-ABI wrapper around the Rust staticlib (libkairos_ffi.a, crate `ffi/`).
+        // The library search path is supplied at link time: `swift build
+        // -Xlinker -L<abs>/lib` (see Makefile). Mirrors the daemonclaw goblin host.
+        .target(
+            name: "CKairosFFI",
+            path: "Sources/CKairosFFI",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("kairos_ffi")]
+        ),
+
         // Pure attribution + domain types. No IO, no AppKit.
         .target(name: "KairosCore", path: "Sources/KairosCore"),
 
@@ -25,7 +35,7 @@ let package = Package(
         .target(name: "KairosServer", dependencies: ["KairosCore", "KairosStore", "KairosRPC"], path: "Sources/KairosServer"),
 
         // Resident menu-bar daemon.
-        .executableTarget(name: "KairosDaemon", dependencies: ["KairosCore", "KairosStore", "KairosRPC", "KairosServer"], path: "Sources/KairosDaemon"),
+        .executableTarget(name: "KairosDaemon", dependencies: ["KairosCore", "KairosStore", "KairosRPC", "KairosServer", "CKairosFFI"], path: "Sources/KairosDaemon"),
 
         .testTarget(name: "KairosCoreTests", dependencies: ["KairosCore"], path: "Tests/KairosCoreTests"),
         .testTarget(name: "KairosRPCTests", dependencies: ["KairosRPC"], path: "Tests/KairosRPCTests"),

@@ -11,6 +11,7 @@
 "Stop" = "停止";
 "Cancel" = "取消";
 "New Activity…" = "新建活动…";
+"Dashboard…" = "仪表盘…";
 "Configure…" = "设置…";
 "Resume" = "继续";
 "Pause" = "暂停";
@@ -26,6 +27,8 @@
 /* Window + sidebar titles */
 "New Activity" = "新建活动";
 "Configure" = "设置";
+"Dashboard" = "仪表盘";
+"Kairos Dashboard" = "Kairos 仪表盘";
 "General" = "通用";
 "Clients" = "客户端";
 "Projects" = "项目";
@@ -67,10 +70,18 @@
 
 /* New Activity window */
 "Title" = "标题";
-"AFK detection off (passive work)" = "关闭 AFK 检测（被动工作）";
+"AFK detection off" = "关闭 AFK 检测";
 "Start" = "开始";
 "End" = "结束";
 "Ongoing" = "进行中";
+
+/* Recent flyout — resume a stopped manual task with AFK detection off */
+"(no AFK)" = "(关闭 AFK)";
+
+/* Restart self-check (NSAlert) — a manual task is still focused after relaunch */
+"Manual activity still in focus" = "手动任务仍在进行";
+"Kairos restarted. Continue tracking this activity: %@" = "Kairos 已重启，是否继续记录该任务：%@";
+"Continue" = "继续";
 
 /* Notifications (parametrized) */
 "Scheduled activity \"%@\" started — switched focus to it." = "定时活动“%@”已开始——已将焦点切换到它。";

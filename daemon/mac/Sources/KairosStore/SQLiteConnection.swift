@@ -65,7 +65,11 @@ final class SQLiteConnection {
         return 0
     }
 
-    func migrate() throws {
+    /// Run pending migrations. `builtinSources` supplies locale-aware display
+    /// names for the daemon's own sources (`manual`, `pty`), applied by the v4
+    /// step — kept out of the static v1 SQL because they depend on the host
+    /// language at init time.
+    func migrate(builtinSources builtins: [(slug: String, display: String, manual: Bool)] = []) throws {
         try exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at REAL NOT NULL);")
         let current = try scalarInt("SELECT COALESCE(MAX(version), 0) FROM schema_version;")
         if current < 1 {
@@ -100,6 +104,18 @@ final class SQLiteConnection {
                 DELETE FROM sources WHERE slug IN ('kairos', 'idle');
                 """)
             try exec("INSERT INTO schema_version (version, applied_at) VALUES (3, \(Date().timeIntervalSince1970));")
+        }
+        if current < 4 {
+            // Locale-aware display names for the daemon's built-in sources. The v1
+            // seed used the raw slug ("manual")/English ("Terminal"); this rewrites
+            // both to the host language at init (retroactive for existing DBs). The
+            // caller owns which source is `manual` (no slug hardcoding here).
+            for (slug, display, manual) in builtins {
+                let stmt = try prepare("INSERT INTO sources (slug, display_name, manual) VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET display_name=excluded.display_name")
+                try stmt.bind([.text(slug), .text(display), .int(manual ? 1 : 0)])
+                _ = try stmt.step()
+            }
+            try exec("INSERT INTO schema_version (version, applied_at) VALUES (4, \(Date().timeIntervalSince1970));")
         }
     }
 }

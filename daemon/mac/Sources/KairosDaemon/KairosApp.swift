@@ -28,7 +28,7 @@ struct KairosApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(model: appDelegate.model)
+            MenuContent(model: appDelegate.model, onDashboard: { appDelegate.showDashboard() })
         } label: {
             Image(nsImage: menuBarIcon(afk: appDelegate.model.isAfk))
         }
@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sampler: IdleSamplerController?
     private var checkpointTimer: Timer?
     private var notificationDelegate: NotificationDelegate?
+    private var dashboard: DashboardWindowController?
 
     override init() {
         // One indirection point for socket/spool (runtime) + db (data). Runtime
@@ -108,9 +109,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 NSLog("kairos: socket server failed: \(error)")
             }
+            await self.model.refresh()
+            // Restart self-check: a focused manual activity lost its in-memory
+            // afk_immune on relaunch. Prompt to re-confirm (re-establishing the
+            // flag) or stop it BEFORE the idle sampler starts — so no afk is
+            // logged during the prompt (no spurious holes, no over-count).
+            if let rec = await self.model.focusedManualActivity() {
+                let choice = self.promptResumeFocused(rec)
+                if choice.continueTracking {
+                    await self.model.setAfkImmune(rec.id, choice.afkOff)
+                } else {
+                    await self.model.stopActivity(rec.id)
+                }
+                await self.model.refresh()
+            }
             self.sampler = IdleSamplerController(store: store, sessions: model.sessions)
             await self.sampler?.start()
-            await self.model.refresh()
             self.model.startRefresh()
 
             let mode = (try? await store.journalMode()) ?? "?"
@@ -131,6 +145,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A menu-bar accessory app must keep running with no windows open. A raw
+    /// NSWindow (the Dashboard) closing would otherwise terminate the app after
+    /// the "last window" closes; SwiftUI Window scenes suppress this, raw ones
+    /// don't, so say so explicitly.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Clicking the Kairos Dock icon (the app stays `.regular` while the Dashboard
+    /// has been opened, so the icon persists) reopens the Dashboard — like
+    /// cc-switch's main window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showDashboard()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         sampler?.stop()
         socketServer?.stop()
@@ -141,6 +171,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task.detached { try? await store.checkpoint(); done.signal() }
         _ = done.wait(timeout: .now() + 2)
     }
+
+    /// Show the Dashboard window (creating it on first open). It's a plain
+    /// `NSWindow` that is destroyed on close (`isReleasedWhenClosed`) and rebuilt
+    /// fresh on the next open — mirroring the Tauri/wry destroy+rebuild pattern
+    /// (e.g. cc-switch's Lightweight Mode). That releases the WKWebView and its
+    /// Web Content process on close, and a fresh webview renders cleanly on
+    /// reopen (a SwiftUI `Window` keeps its scene alive, which neither releases
+    /// the process nor reliably re-renders).
+    func showDashboard() {
+        NSApp.activate(ignoringOtherApps: true)
+        if dashboard == nil { dashboard = DashboardWindowController(model: model) }
+        dashboard?.show()
+    }
+
+    /// Restart self-check prompt for a focused manual activity. The user re-decides
+    /// whether to keep tracking it (afk_immune is in-memory and was lost on
+    /// relaunch) and whether AFK detection stays off. Accessory app, so activate
+    /// first or the sheet won't come to the front.
+    @MainActor
+    private func promptResumeFocused(_ record: ActivityRecord) -> (continueTracking: Bool, afkOff: Bool) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("Manual activity still in focus", comment: "")
+        let name = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? record.displayName
+        alert.informativeText = String(
+            format: NSLocalizedString("Kairos restarted. Continue tracking this activity: %@", comment: ""), name)
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: NSLocalizedString("Continue", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("Stop", comment: ""))
+        let afkOff = NSButton(checkboxWithTitle: NSLocalizedString("AFK detection off", comment: ""), target: nil, action: nil)
+        alert.accessoryView = afkOff
+        let continueTracking = alert.runModal() == .alertFirstButtonReturn
+        return (continueTracking, afkOff.state == .on)
+    }
 }
 
 @MainActor
@@ -149,6 +213,8 @@ final class DaemonModel {
     let store: Store
     let sessions: SessionRegistry
     let dispatcher: Dispatcher
+    /// In-process reducer for the Dashboard window (direct Store reads, memoized).
+    let report: ReportBridge
     private(set) var menuLabel = "Kairos"
     private(set) var isPaused = false
     private(set) var isAfk = false
@@ -185,6 +251,7 @@ final class DaemonModel {
         self.sessions = sessions
         self.notify = notify
         self.dispatcher = Dispatcher(sessions: sessions, notify: Notifier.deliver)
+        self.report = ReportBridge(store: store)
     }
 
     func startRefresh() {
@@ -320,11 +387,28 @@ final class DaemonModel {
     }
 
     /// Reactivate a Recent manual activity by its id: focus it now (it's already
-    /// visible; placement becomes Ongoing).
-    func reactivate(_ id: Int64) async {
+    /// visible; placement becomes Ongoing). `afkImmune` is a launch-time option —
+    /// afk_immune is in-memory, not persisted.
+    func reactivate(_ id: Int64, afkImmune: Bool = false) async {
         try? await store.setActivityState(activityId: id, .visible)
         try? await store.appendActivityEvent(activityId: id, kind: .focus, ts: Date().timeIntervalSince1970)
+        await sessions.setAfkImmune(id, afkImmune)
         await refresh()
+    }
+
+    /// After a restart, a focused manual activity has lost its in-memory
+    /// afk_immune. Returns it so the host can prompt to re-confirm or stop it;
+    /// nil when no manual activity holds focus.
+    func focusedManualActivity() async -> ActivityRecord? {
+        guard let id = focusedId,
+              let manuals = try? await store.manualActivityIds(),
+              manuals.contains(id) else { return nil }
+        if let rec = ongoingActivities.first(where: { $0.id == id }) { return rec }
+        return try? await store.loadActivity(id: id)
+    }
+
+    func setAfkImmune(_ id: Int64, _ on: Bool) async {
+        await sessions.setAfkImmune(id, on)
     }
 
     /// Manual focus switch (green-dot activity), a `focus` event.
@@ -397,6 +481,7 @@ private struct HoverRow<Content: View>: View {
 
 private struct MenuContent: View {
     let model: DaemonModel
+    let onDashboard: () -> Void
     @Environment(\.openWindow) private var openWindow
     @State private var flyout: Int64?   // the Recent task whose submenu is open
 
@@ -495,6 +580,7 @@ private struct MenuContent: View {
             }
 
             actionRow("New Activity…", "plus") { open("activity") }
+            actionRow("Dashboard…", "chart.xyaxis.line") { onDashboard() }
             actionRow("Configure…", "gearshape") { open("configure") }
             actionRow(model.isPaused ? "Resume" : "Pause", model.isPaused ? "play.fill" : "pause.fill") {
                 Task { await model.togglePause() }
@@ -514,21 +600,28 @@ private struct MenuContent: View {
             flyoutRow("Resume", "arrowtriangle.right.fill") {
                 flyout = nil; Task { await model.reactivate(t.id) }
             }
+            flyoutRow("Resume", suffix: "(no AFK)", "arrowtriangle.right.fill") {
+                flyout = nil; Task { await model.reactivate(t.id, afkImmune: true) }
+            }
             flyoutRow("Archive", "arrow.down.to.line") {
                 flyout = nil; Task { await model.archiveActivity(t.id) }
             }
         }
         .padding(.vertical, 6)
-        .frame(width: 150)
+        .frame(width: 155)
         .presentationBackground { VisualEffect() }
     }
 
-    private func flyoutRow(_ title: LocalizedStringKey, _ icon: String, _ action: @escaping () -> Void) -> some View {
+    /// A flyout row. `suffix` (e.g. "(no AFK)" on the AFK-off Resume) renders as a
+    /// small muted tag after the title; nil for plain rows.
+    private func flyoutRow(_ title: LocalizedStringKey, suffix: LocalizedStringKey? = nil, _ icon: String, _ action: @escaping () -> Void) -> some View {
         HoverRow {
             Button(action: action) {
                 HStack(spacing: 8) {
                     Image(systemName: icon).frame(width: iconColumn)
-                    Text(title); Spacer(minLength: 0)
+                    Text(title)
+                    if let suffix { Text(suffix).font(.caption).foregroundStyle(.tertiary) }
+                    Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
@@ -605,12 +698,14 @@ struct ActivityView: View {
                 Text("None").tag(Int64?.none)
                 ForEach(model.clients, id: \.id) { Text($0.name).tag(Int64?.some($0.id)) }
             }
-            Toggle("AFK detection off (passive work)", isOn: $afkImmune)
             DatePicker("Start", selection: $start, displayedComponents: [.date, .hourAndMinute])
             Toggle("Ongoing", isOn: $ongoing)
             if !ongoing {
                 DatePicker("End", selection: $end, in: start..., displayedComponents: [.date, .hourAndMinute])
             }
+            Divider()
+            // A launch option, not content — AFK detection off while this task is focused.
+            Toggle("AFK detection off", isOn: $afkImmune)
             HStack {
                 Spacer()
                 Button("Start") {
@@ -680,15 +775,15 @@ enum CLITool {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: linkPath)) == bundledPath
     }
 
-    static func install() -> String? {
+    @MainActor static func install() -> String? {
         run("mkdir -p /usr/local/bin && ln -sf \(shq(bundledPath)) \(shq(linkPath))")
     }
-    static func uninstall() -> String? { run("rm -f \(shq(linkPath))") }
+    @MainActor static func uninstall() -> String? { run("rm -f \(shq(linkPath))") }
 
     /// Run a shell command with one admin prompt (SecurityAgent draws it). Returns
     /// nil on success, else the error message. The prompt steals foreground from this
     /// accessory app, so re-activate once it returns — repairs focus for both callers.
-    private static func run(_ shell: String) -> String? {
+    @MainActor private static func run(_ shell: String) -> String? {
         // Two nested layers to escape: the shell command sits inside an AppleScript
         // string literal. `shell` is our own literal (no metachars); only the
         // interpolated paths are quoted (via `sh`), so a path with `'` or `"` — a

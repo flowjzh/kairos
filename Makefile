@@ -1,4 +1,4 @@
-.PHONY: build test app app-dev cli rust install install-dev uninstall \
+.PHONY: build test app app-dev cli ffi dashboard rust install install-dev uninstall \
         start stop start-dev stop-dev dev plugin clean clean-dev
 
 # The Swift daemon lives under daemon/mac/; the Rust CLI/PTY + Claude Code hook
@@ -28,6 +28,14 @@ BIN_RELEASE  := $(SWIFT_PKG)/.build/$(ARCH)-apple-macosx/release
 BIN_DEBUG    := $(SWIFT_PKG)/.build/$(ARCH)-apple-macosx/debug
 BIN_KAIROS   := target/$(RUST_TARGET)/release/kairos
 BIN_HOOK     := target/$(RUST_TARGET)/hook/kairos-claude-code
+FFI_LIB      := target/$(RUST_TARGET)/release/libkairos_ffi.a
+DASH_DIST    := dashboard/dist
+# The general C-ABI staticlib is staged into the Swift package's lib/ and passed
+# to every Swift build via -Xlinker (mirrors daemonclaw goblin). SPM doesn't
+# track the .a as a dependency, so `ffi` touches a daemon source to force a
+# relink when the staticlib changes.
+SWIFT_FFI_LIB := $(CURDIR)/$(SWIFT_PKG)/lib
+SWIFT_LINK    := -Xlinker -L$(SWIFT_FFI_LIB)
 UID          := $(shell id -u)
 
 # Per-arch products so a cross-build never clobbers host artifacts.
@@ -49,8 +57,8 @@ PLUGIN_DIR   := plugins/claude-code
 DEV_RUNTIME_DIR := $(HOME)/.kairos-dev
 DEV_DATA_DIR    := $(HOME)/Library/Application Support/Kairos-dev
 
-build:
-	swift build --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
+build: ffi
+	swift build --package-path $(SWIFT_PKG) $(SWIFT_ARCH) $(SWIFT_LINK)
 
 # The shared release CLI (`kairos`), built once per arch. The release profile
 # unwinds on panic so the PTY wrapper can restore the terminal from raw mode.
@@ -58,19 +66,36 @@ build:
 cli:
 	cargo build --release --bin kairos $(CARGO_ARCH)
 
+# The general C-ABI staticlib (libkairos_ffi.a, crate `ffi/`) — the one link
+# boundary between the Swift daemon and Kairos Rust modules (report today; store
+# + attribution later). Staged into the Swift package's lib/ and passed via
+# -Xlinker at every Swift build. SPM doesn't track the .a, so touch a daemon
+# source to force a relink when it changes (else a stale binary is linked).
+ffi:
+	cargo build --release -p kairos-ffi $(CARGO_ARCH)
+	@mkdir -p $(SWIFT_FFI_LIB)
+	cp $(FFI_LIB) $(SWIFT_FFI_LIB)/
+	@touch $(SWIFT_PKG)/Sources/KairosDaemon/ReportBridge.swift
+
+# The bundled dashboard web app (Vite → dashboard/dist/). One-time `pnpm
+# install` is expected; --frozen-lockfile keeps the build reproducible. `dist/`
+# is copied into the .app's Resources by `app`/`app-dev`.
+dashboard:
+	cd dashboard && pnpm install --frozen-lockfile && pnpm build
+
 # The CLI plus the plugin hook binary. The hook aborts on panic (no state to
 # unwind → a smaller binary in target/hook).
 rust: cli
 	cargo build --profile hook --bin kairos-claude-code $(CARGO_ARCH)
 
-test:
+test: ffi
 	cargo test $(CARGO_ARCH)
-	swift test -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
+	swift test -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH) $(SWIFT_LINK)
 
 # Build the release .app: strip the binary (Rust already strips via the release
 # profile; this is the Swift half), stage the release Info.plist, ad-hoc sign.
-app: cli
-	swift build -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH)
+app: cli ffi dashboard
+	swift build -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH) $(SWIFT_LINK)
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS"
 	cp "$(BIN_RELEASE)/KairosDaemon" "$(APP)/Contents/MacOS/Kairos"
@@ -80,6 +105,10 @@ app: cli
 	cp Support/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	plutil -lint Support/zh-Hans.lproj/Localizable.strings
 	cp -R Support/zh-Hans.lproj "$(APP)/Contents/Resources/zh-Hans.lproj"
+	# The Dashboard web app ships under Resources/dashboard/ (WKWebView loads it
+	# via file://; KAIROS_DASHBOARD_DEV points it at the Vite dev server instead).
+	@mkdir -p "$(APP)/Contents/Resources/dashboard"
+	cp -R $(DASH_DIST)/. "$(APP)/Contents/Resources/dashboard/"
 	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	# The CLI ships inside the bundle (renamed to avoid a case-insensitive clash
 	# with the Kairos daemon exec); the user opts into a /usr/local/bin symlink
@@ -92,7 +121,7 @@ app: cli
 # Info.plist (distinct bundle id/name). The dev dirs are baked in as
 # LSEnvironment so a double-click / `make dev` reaches the dev instance; the code
 # stays env-driven and dev-agnostic.
-app-dev: build cli
+app-dev: build cli dashboard
 	@rm -rf "$(APP_DEV)"
 	@mkdir -p "$(APP_DEV)/Contents/MacOS"
 	cp "$(BIN_DEBUG)/KairosDaemon" "$(APP_DEV)/Contents/MacOS/Kairos"
@@ -101,6 +130,10 @@ app-dev: build cli
 	cp Support/AppIcon.icns "$(APP_DEV)/Contents/Resources/AppIcon.icns"
 	plutil -lint Support/zh-Hans.lproj/Localizable.strings
 	cp -R Support/zh-Hans.lproj "$(APP_DEV)/Contents/Resources/zh-Hans.lproj"
+	# Dashboard web app (the dev app also serves it from disk; point it at the
+	# Vite dev server with KAIROS_DASHBOARD_DEV=1 for HMR during front-end work).
+	@mkdir -p "$(APP_DEV)/Contents/Resources/dashboard"
+	cp -R $(DASH_DIST)/. "$(APP_DEV)/Contents/Resources/dashboard/"
 	/usr/libexec/PlistBuddy \
 	  -c "Add :LSEnvironment dict" \
 	  -c "Add :LSEnvironment:KAIROS_RUNTIME_DIR string $(DEV_RUNTIME_DIR)" \
@@ -194,4 +227,4 @@ clean-dev:
 clean:
 	swift package clean --package-path $(SWIFT_PKG)
 	cargo clean
-	rm -rf build
+	rm -rf build $(DASH_DIST) $(SWIFT_FFI_LIB)

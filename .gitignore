@@ -15,6 +15,14 @@ Package.resolved
 # Built plugin binary (produced by `make plugin`)
 plugins/claude-code/bin/
 
+# Dashboard web app (Vite build output + deps)
+dashboard/dist/
+dashboard/node_modules/
+dashboard/*.tsbuildinfo
+
+# Staged C-ABI staticlib (produced by `make ffi`)
+daemon/mac/lib/
+
 # Local runtime data (never commit)
 ~/.kairos/
 *.db

@@ -17,7 +17,13 @@ public actor Store {
 
     public init(path: String) throws {
         self.db = try SQLiteConnection(path: path)
-        try self.db.migrate()
+        // Seed locale-aware display names for the daemon's built-in sources at
+        // init (v4 migration). Resolved from the host language now in effect.
+        let lang = AppSettings.effectiveLanguage
+        try self.db.migrate(builtinSources: [
+            ("manual", SourceLabels.display(slug: "manual", language: lang), true),
+            ("pty", SourceLabels.display(slug: "pty", language: lang), false),
+        ])
     }
 
     // MARK: Change signal (event-driven refresh)

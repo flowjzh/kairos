@@ -80,9 +80,9 @@ enum Schema {
 
         -- Built-in sources. `manual` (user-managed, backdrop-eligible) is the one
         -- manual source; auto sources (claude-code, pty, ...) default to
-        -- manual=0. `pty` is seeded so the wrapper's terminal activities carry a
-        -- built-in "Terminal" label without a plugin to report one.
-        INSERT INTO sources (slug, display_name, manual) VALUES ('manual', 'manual', 1);
+        -- manual=0. Display names here are English placeholders — the v4 migration
+        -- rewrites them to the host locale's labels (`SourceLabels`).
+        INSERT INTO sources (slug, display_name, manual) VALUES ('manual', 'Manual', 1);
         INSERT INTO sources (slug, display_name, manual) VALUES ('pty', 'Terminal', 0);
     """#
 }
