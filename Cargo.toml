@@ -7,6 +7,9 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
+# Size-focused: nothing here is a hot loop (the report reducer is one-pass O(n)
+# and memoized), so the default opt-level 3 (speed) just bloats the binaries.
+opt-level = 's'
 strip = true
 lto = true
 codegen-units = 1
