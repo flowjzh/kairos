@@ -19,6 +19,8 @@ thinking, prompting) from *AI execution* time, and attributes that human time **
 agent**. Today it tracks Claude Code out of the box; the client model means any agent
 is a small `kairos-<agent>` hook away.
 
+<img width="972" height="785" alt="Screenshot 2026-07-22 at 22 44 15" src="https://github.com/user-attachments/assets/ff17b182-1953-4aeb-87e0-32f3a7e60b05" />
+
 ## Features
 
 - **Per-agent human-time attribution** — the headline. Track genuine engagement with
@@ -113,10 +115,6 @@ Kairos is local-first: all data lives in a SQLite file on your machine
 no telemetry — nothing leaves your Mac. It needs **no Accessibility or Automation
 permissions**: because attribution is intent-based (which session you submit to, which
 activity you start), Kairos never reads window titles or inspects other apps.
-
-## Screenshots
-
-*(Coming soon — the Dashboard window, menu-bar flyout, and config panel.)*
 
 ## Status
 
