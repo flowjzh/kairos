@@ -2,5 +2,8 @@
   "name": "kairos-claude-code",
   "version": "0.1.0",
   "description": "Kairos human-time tracking for Claude Code sessions",
-  "author": { "name": "Kairos" }
+  "author": { "name": "Flow Jiang" },
+  "homepage": "https://github.com/flowjzh/kairos",
+  "repository": "https://github.com/flowjzh/kairos",
+  "license": "MIT"
 }

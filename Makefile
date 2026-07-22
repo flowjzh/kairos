@@ -1,5 +1,5 @@
 .PHONY: build test app app-dev cli ffi dashboard rust install install-dev uninstall \
-        start stop start-dev stop-dev dev plugin clean clean-dev
+        start stop start-dev stop-dev dev clean clean-dev
 
 # The Swift daemon lives under daemon/mac/; the Rust CLI/PTY + Claude Code hook
 # are the root Cargo workspace (libs/codec, libs/client, cli, plugins/claude-code).
@@ -106,9 +106,25 @@ test: ffi
 	cargo test $(CARGO_ARCH)
 	swift test -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH) $(SWIFT_LINK)
 
+# Stage the self-contained Claude Code plugin (= a local marketplace) into the app
+# at Resources/plugins/claude-code/. For a directory marketplace Claude Code runs
+# the plugin in place (no download, no bash). $(1) = the .app path; $(2) = the
+# marketplace NAME to stamp (release `kairos`, dev `kairos-dev`) so the two never
+# collide in ~/.claude/settings.json. `plutil -replace` (not sed) edits the JSON by
+# key — loud on a missing key/file, never a silent no-op. Ad-hoc sign before seal.
+define BUNDLE_PLUGIN
+	@mkdir -p "$(1)/Contents/Resources/plugins/claude-code/bin"
+	cp -R $(PLUGIN_DIR)/.claude-plugin $(PLUGIN_DIR)/hooks "$(1)/Contents/Resources/plugins/claude-code/"
+	cp $(BIN_HOOK) "$(1)/Contents/Resources/plugins/claude-code/bin/kairos-claude-code"
+	plutil -replace name -string "$(2)" \
+	  "$(1)/Contents/Resources/plugins/claude-code/.claude-plugin/marketplace.json"
+	codesign --force --sign - "$(1)/Contents/Resources/plugins/claude-code/bin/kairos-claude-code"
+endef
+
 # Build the release .app: strip the binary (Rust already strips via the release
 # profile; this is the Swift half), stage the release Info.plist, ad-hoc sign.
-app: cli ffi dashboard
+# `rust` builds the CLI + the plugin hook binary (BIN_KAIROS + BIN_HOOK).
+app: rust ffi dashboard
 	swift build -c release --package-path $(SWIFT_PKG) $(SWIFT_ARCH) $(SWIFT_LINK)
 	@rm -rf "$(APP)"
 	@mkdir -p "$(APP)/Contents/MacOS"
@@ -130,13 +146,14 @@ app: cli ffi dashboard
 	# via Configure. Ad-hoc sign the inner binary BEFORE sealing the bundle.
 	cp "$(BIN_KAIROS)" "$(APP)/Contents/MacOS/kairos-cli"
 	codesign --force --sign - "$(APP)/Contents/MacOS/kairos-cli"
+	$(call BUNDLE_PLUGIN,$(APP),kairos)
 	codesign --force --sign - "$(APP)"
 
 # Build the dev .app: debug build (symbols kept, not stripped) + the dev
 # Info.plist (distinct bundle id/name). The dev dirs are baked in as
 # LSEnvironment so a double-click / `make dev` reaches the dev instance; the code
 # stays env-driven and dev-agnostic.
-app-dev: build cli dashboard
+app-dev: build rust dashboard
 	@rm -rf "$(APP_DEV)"
 	@mkdir -p "$(APP_DEV)/Contents/MacOS"
 	cp "$(BIN_DEBUG)/KairosDaemon" "$(APP_DEV)/Contents/MacOS/Kairos"
@@ -160,23 +177,8 @@ app-dev: build cli dashboard
 	# against the dev app). Sign the inner binary before sealing the bundle.
 	cp "$(BIN_KAIROS)" "$(APP_DEV)/Contents/MacOS/kairos-cli"
 	codesign --force --sign - "$(APP_DEV)/Contents/MacOS/kairos-cli"
+	$(call BUNDLE_PLUGIN,$(APP_DEV),kairos-dev)
 	codesign --force --sign - "$(APP_DEV)"
-
-# Build the Claude Code hook binary and stage it into the plugin. The binary
-# must exist before a formal install, since Claude copies the plugin (incl.
-# bin/) into its own cache. Dev loop: claude --plugin-dir plugins/claude-code
-# Formal install (persists across sessions), run inside Claude Code:
-#   /plugin marketplace add $(CURDIR)
-#   /plugin install kairos-claude-code@kairos
-plugin: rust
-	@mkdir -p $(PLUGIN_DIR)/bin
-	cp $(BIN_HOOK) $(PLUGIN_DIR)/bin/kairos-claude-code
-	@echo
-	@echo "Staged $(PLUGIN_DIR)/bin/kairos-claude-code"
-	@echo "Formal install — run inside Claude Code:"
-	@echo "  /plugin marketplace add $(CURDIR)"
-	@echo "  /plugin install kairos-claude-code@kairos"
-	@echo "Rebuilt the binary? Re-run this, then /plugin install again (or /reload-plugins)."
 
 # Install the release app + the shared CLI. The daemon does NOT start here — run
 # `make start`, or flip "Launch Kairos at login" in the app (SMAppService.mainApp

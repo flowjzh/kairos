@@ -802,13 +802,14 @@ enum CLITool {
 }
 
 private enum ConfigSection: String, CaseIterable, Identifiable {
-    case general, clients, projects
+    case general, clients, projects, plugins
     var id: String { rawValue }
     var title: LocalizedStringKey {
         switch self {
         case .general: "General"
         case .clients: "Clients"
         case .projects: "Projects"
+        case .plugins: "Plugins"
         }
     }
     var icon: String {
@@ -816,6 +817,7 @@ private enum ConfigSection: String, CaseIterable, Identifiable {
         case .general: "gearshape"
         case .clients: "person.2"
         case .projects: "folder"
+        case .plugins: "puzzlepiece.extension"
         }
     }
 }
@@ -846,6 +848,7 @@ struct ConfigView: View {
         case .general: GeneralPane()
         case .clients: ClientsPane(model: model)
         case .projects: ProjectsPane(model: model)
+        case .plugins: PluginsPane()
         }
     }
 }
@@ -913,6 +916,75 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The Plugins pane. Kairos integrates with Claude Code as a plugin: the app
+/// registers its bundled local marketplace with Claude Code, and the user installs
+/// the plugin with `claude plugin`. Gated on a detected Claude Code CLI.
+private struct PluginsPane: View {
+    // Detection (`claude` path, possibly via a login-shell subprocess) and the
+    // settings.json read are loaded off the main thread in `.task` rather than in
+    // the @State default, so a slow shell probe can't stall the window and neither
+    // re-runs on every body re-render.
+    @State private var claudePath: String?
+    @State private var registered = false
+    @State private var status: String?
+
+    private static let installURL = URL(string: "https://code.claude.com/docs")!
+
+    var body: some View {
+        Form {
+            Section("Claude Code") {
+                if let claudePath {
+                    registeredControls
+                    if registered {
+                        installInstructions
+                    }
+                    if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+                } else {
+                    notInstalledRow
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task {
+            claudePath = await Task.detached { ClaudeCode.detect() }.value
+            registered = ClaudeMarketplace.isRegistered
+        }
+    }
+
+    private var notInstalledRow: some View {
+        HStack {
+            Text("Claude Code isn't installed. Install it, then reopen this window.")
+            Spacer()
+            Link("Install", destination: Self.installURL)
+        }
+    }
+
+    private var registeredControls: some View {
+        HStack {
+            Text(registered
+                 ? "The Kairos marketplace is registered with Claude Code."
+                 : "Register the Kairos marketplace, then install the plugin below.")
+            Spacer()
+            Button(registered ? "Unregister" : "Register") {
+                status = registered ? ClaudeMarketplace.unregister() : ClaudeMarketplace.register()
+                registered = ClaudeMarketplace.isRegistered
+            }
+        }
+    }
+
+    private var installInstructions: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Install the plugin (pick a scope):")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: "claude plugin install \(ClaudeMarketplace.pluginRef) --scope user")
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+            Text("Scope: `user` (all projects), `project` (shared), or `local` (just you). Update or remove it later with `claude plugin update` / `uninstall`.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "kairos",
+  "owner": { "name": "Flow Jiang" },
+  "description": "Kairos — per-agent human-time tracking",
+  "plugins": [
+    {
+      "name": "kairos-claude-code",
+      "source": ".",
+      "description": "Kairos human-time tracking for Claude Code sessions"
+    }
+  ]
+}

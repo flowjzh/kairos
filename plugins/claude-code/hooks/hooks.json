@@ -1,16 +1,16 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code" }] }
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code" }] }
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code" }] }
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code" }] }
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ]
   }
 }

@@ -41,5 +41,6 @@ let package = Package(
         .testTarget(name: "KairosRPCTests", dependencies: ["KairosRPC"], path: "Tests/KairosRPCTests"),
         .testTarget(name: "KairosStoreTests", dependencies: ["KairosStore"], path: "Tests/KairosStoreTests"),
         .testTarget(name: "KairosServerTests", dependencies: ["KairosServer"], path: "Tests/KairosServerTests"),
+        .testTarget(name: "KairosDaemonTests", dependencies: ["KairosDaemon"], path: "Tests/KairosDaemonTests"),
     ]
 )

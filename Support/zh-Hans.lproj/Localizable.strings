@@ -32,6 +32,7 @@
 "General" = "通用";
 "Clients" = "客户端";
 "Projects" = "项目";
+"Plugins" = "插件";
 
 /* General pane */
 "Startup" = "启动";
@@ -51,6 +52,15 @@
 "The `kairos` command is installed in /usr/local/bin." = "`kairos` 命令已安装到 /usr/local/bin。";
 "Install" = "安装";
 "Uninstall" = "卸载";
+
+/* Plugins pane — Claude Code */
+"Claude Code isn't installed. Install it, then reopen this window." = "尚未安装 Claude Code。请先安装，然后重新打开此窗口。";
+"The Kairos marketplace is registered with Claude Code." = "Kairos 市场已注册到 Claude Code。";
+"Register the Kairos marketplace, then install the plugin below." = "注册 Kairos 市场，然后在下方安装插件。";
+"Register" = "注册";
+"Unregister" = "取消注册";
+"Install the plugin (pick a scope):" = "安装插件（选择作用域）：";
+"Scope: `user` (all projects), `project` (shared), or `local` (just you). Update or remove it later with `claude plugin update` / `uninstall`." = "作用域：`user`（所有项目）、`project`（团队共享）或 `local`（仅自己）。之后可用 `claude plugin update` / `uninstall` 更新或移除。";
 
 /* Clients pane */
 "None" = "无";
