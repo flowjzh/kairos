@@ -54,7 +54,7 @@ fn dispatch(args: &[String], socket: &str, spool: &str) -> Result<u8, cli::CliEr
             Ok(0)
         }
         "--version" | "-V" => {
-            println!("kairos {}", env!("CARGO_PKG_VERSION"));
+            println!("kairos {}", env!("KAIROS_VERSION"));
             Ok(0)
         }
         "snapshot" => {

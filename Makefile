@@ -38,6 +38,20 @@ SWIFT_FFI_LIB := $(CURDIR)/$(SWIFT_PKG)/lib
 SWIFT_LINK    := -Xlinker -L$(SWIFT_FFI_LIB)
 UID          := $(shell id -u)
 
+# Version (tag-as-source): the git tag is the single source of truth. The macOS
+# app's CFBundleShortVersionString is the clean latest tag; CFBundleVersion is the
+# commit count (a monotonic build number Apple accepts). KAIROS_VERSION is passed
+# to the Rust CLI build so `kairos -V` reports the same. Falls back when there are
+# no tags / no git (a tarball build) — the checked-in plist values stand in then.
+# Lazily evaluated + memoized (`=` + $(eval)) so the two git shell-outs run only
+# when a versioned target actually needs them, then once — never on `make
+# test`/`clean`/`stop` (same reason BIN_* avoid a per-invocation shell-out above).
+VERSION = $(eval VERSION := $(or $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'),0.1.0-dev))$(VERSION)
+BUILD   = $(eval BUILD := $(or $(shell git rev-list --count HEAD 2>/dev/null),1))$(BUILD)
+STAMP_VERSION = /usr/libexec/PlistBuddy \
+  -c 'Set :CFBundleShortVersionString $(VERSION)' \
+  -c 'Set :CFBundleVersion $(BUILD)'
+
 # Per-arch products so a cross-build never clobbers host artifacts.
 BUILD_DIR    := build/$(ARCH)
 APP          := $(BUILD_DIR)/Kairos.app
@@ -64,7 +78,7 @@ build: ffi
 # unwinds on panic so the PTY wrapper can restore the terminal from raw mode.
 # A prerequisite of `app`/`app-dev` (bundled) and `install` (symlinked onto PATH).
 cli:
-	cargo build --release --bin kairos $(CARGO_ARCH)
+	KAIROS_VERSION='$(VERSION)' cargo build --release --bin kairos $(CARGO_ARCH)
 
 # The general C-ABI staticlib (libkairos_ffi.a, crate `ffi/`) — the one link
 # boundary between the Swift daemon and Kairos Rust modules (report today; store
@@ -101,6 +115,7 @@ app: cli ffi dashboard
 	cp "$(BIN_RELEASE)/KairosDaemon" "$(APP)/Contents/MacOS/Kairos"
 	strip -x "$(APP)/Contents/MacOS/Kairos"
 	cp Support/Info.plist "$(APP)/Contents/Info.plist"
+	$(STAMP_VERSION) "$(APP)/Contents/Info.plist"
 	@mkdir -p "$(APP)/Contents/Resources"
 	cp Support/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	plutil -lint Support/zh-Hans.lproj/Localizable.strings
@@ -126,6 +141,7 @@ app-dev: build cli dashboard
 	@mkdir -p "$(APP_DEV)/Contents/MacOS"
 	cp "$(BIN_DEBUG)/KairosDaemon" "$(APP_DEV)/Contents/MacOS/Kairos"
 	cp Support/Info-Dev.plist "$(APP_DEV)/Contents/Info.plist"
+	$(STAMP_VERSION) "$(APP_DEV)/Contents/Info.plist"
 	@mkdir -p "$(APP_DEV)/Contents/Resources"
 	cp Support/AppIcon.icns "$(APP_DEV)/Contents/Resources/AppIcon.icns"
 	plutil -lint Support/zh-Hans.lproj/Localizable.strings
