@@ -1,4 +1,7 @@
-# Kairos
+<h1 align="center">
+  <img src="assets/app-icon.svg" width="128" alt="Kairos"><br>
+  Kairos
+</h1>
 
 > Measure **kairos** — the time you are genuinely present — not **chronos**, the wall-clock time the machine spends grinding.
 
