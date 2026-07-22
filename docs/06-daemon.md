@@ -1,6 +1,6 @@
 # 06 — Daemon Design (`kairosd`)
 
-A lean Swift macOS app (`LSUIElement = YES` — menu-bar only, no Dock icon), installed as a user `LaunchAgent`. It is deliberately **small**: its only resident responsibilities are sampling idle, ingesting events over a socket, hosting the menu bar, and presenting a small config window. All derivation (attribution, export, summarization) happens on demand and mostly outside the daemon.
+A lean Swift macOS app (`LSUIElement = YES` — menu-bar only, no Dock icon), launched on demand or registered as a login item (no `launchd`). It is deliberately **small**: its only resident responsibilities are sampling idle, ingesting events over a socket, hosting the menu bar, and presenting a small config window. All derivation (attribution, export, summarization) happens on demand and mostly outside the daemon.
 
 ## Subsystems
 
@@ -77,8 +77,9 @@ Drives the menu-bar label only; authoritative attribution is always the read-tim
 
 ## Install / lifecycle
 
-- **Bundle:** a `.app` with the daemon binary; `Info.plist` sets `LSUIElement`. Installer writes `~/Library/LaunchAgents/dev.kairos.daemon.plist` and `launchctl load`s it.
-- **LaunchAgent plist:** `RunAtLoad = true`, `KeepAlive = true`. No `MachServices` — the daemon opens its own Unix socket.
+- **Bundle:** a `.app` with the daemon binary; `Info.plist` sets `LSUIElement`. No `launchd`/LaunchAgent is involved.
+- **Start/stop:** on demand — `make start`/`stop` (and `open`/`SIGTERM` under the hood) launch and stop the app. The daemon gracefully checkpoints the WAL on `SIGTERM`.
+- **Autostart at login:** an in-app toggle backed by `SMAppService.mainApp` — the app registers itself as a login item (the system's "Open at Login" entry), no plist. A single-instance guard (one per bundle id) keeps a login-launched copy and an on-demand copy from doubling up.
 - **Paths:** DB at `~/Library/Application Support/Kairos/kairos.db`; socket + spool + config under `~/.kairos/`.
 
 ## Snapshots (reproducibility, not caching)

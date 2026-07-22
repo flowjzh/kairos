@@ -4,7 +4,7 @@
 
 | Component | Form | Lifecycle | Role |
 |---|---|---|---|
-| **`kairosd`** | Swift app (`LSUIElement`, no Dock icon) | Resident `LaunchAgent`, restarted by launchd | **Idle sampler** + **socket ingest** + **menu-bar host**. Nothing else. |
+| **`kairosd`** | Swift app (`LSUIElement`, no Dock icon) | Resident accessory app; started on demand or as a login item (`SMAppService.mainApp`) | **Idle sampler** + **socket ingest** + **menu-bar host**. Nothing else. |
 | **Attribution library (`KairosCore`)** | Swift library | Linked only into the daemon | Computes segments from events at read time. Daemon-internal — not linked into the CLI, not exposed via FFI. Reached by external consumers and `kairos export` **through the socket**. |
 | **Client** | Any process, any language | Short-lived per event | Reports activity/events to the daemon over a local socket (or via the `kairos` CLI). |
 | **Consumer** | Any process, any language | On-demand | Reads computed segments via the **Python/Node SDK** (or `kairos export`) and produces timesheets/deliverables. |
@@ -49,7 +49,7 @@ Everything else — event recording, attribution, export, summarization — is s
 
 ## Process model
 
-- **Daemon:** a user-session `LaunchAgent` (`~/Library/LaunchAgents/dev.kairos.daemon.plist`), `KeepAlive` for crash/login restart. Accessory app (menu bar only). Owns the SQLite handle (WAL) as the single writer, and listens on a Unix domain socket.
+- **Daemon:** a resident accessory app (menu bar only) — no `launchd`/LaunchAgent. Started on demand (`make start`/`open`) or registered as a login item via `SMAppService.mainApp`; a single-instance guard keeps one copy per bundle id. Owns the SQLite handle (WAL) as the single writer, and listens on a Unix domain socket.
 - **Clients & consumers:** external processes in any language. They speak line-JSON RPC over the Unix socket (directly or via the Python/Node SDK), or shell out to the `kairos` CLI (which wraps the socket and falls back to a spool file if the daemon is down). None are resident.
 
 ## IPC: a local socket, not XPC (and not HTTP)

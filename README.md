@@ -2,147 +2,184 @@
 
 > Measure **kairos** — the time you are genuinely present — not **chronos**, the wall-clock time the machine spends grinding.
 
-Kairos is a local-first, macOS **human-time kernel**. It records the time you are actually engaged with your work — reading, thinking, prompting, researching — and attributes each block of active time to the activity (a Claude Code session, a client meeting, an ad-hoc task) you were driving. It is built for freelancers who need an accurate, summarizable timesheet of *human* effort, distinct from AI/tool execution time.
+In the AI era, a freelancer or employee's day is no longer one app in focus. It's
+interleaved — a Claude Code session here, a Cursor turn there, reviewing an agent's
+pull request, prompting, waiting, re-prompting. Conventional time trackers can't see
+this: they key off the frontmost window or a manual start/stop, so they log either
+*machine* time (the agent grinding) or nothing useful, and can never answer *"how
+long was I actually engaged with each agent this week?"*
+
+**Kairos** is a local-first daemon that records the time you are genuinely **engaged**
+with your work and attributes each block to the activity driving it — a Claude Code
+session, a client meeting, an ad-hoc task. It separates *human* effort (reading,
+thinking, prompting) from *AI execution* time, and attributes that human time **per
+agent**. Today it tracks Claude Code out of the box; the client model means any agent
+is a small `kairos-<agent>` hook away.
+
+## Features
+
+- **Per-agent human-time attribution** — the headline. Track genuine engagement with
+  each AI agent separately, not the wall-clock the agent ran for.
+- **Submit-anchored AI attribution** — for an AI session, the active window is
+  `[prompt | agent-stops, you-submit]`: your thinking/reading time counts, the agent's
+  autonomous execution does not.
+- **Manual activities & meetings** — start/stop from the menu bar; explicit-time
+  activities are AFK-immune (a meeting doesn't fragment when you go idle).
+- **Any terminal command** — launch it as `kairos <command>` and Kairos records when
+  that terminal is in focus, so editors, `ssh`, REPLs, and other interactive CLI work
+  are tracked too — not just AI sessions.
+- **Dashboard** — a per-source timeline (each agent a translucent area, total
+  overlaid), a paged raw-segments table, and a client → project summary tree.
+- **Local-first & private** — everything stays on disk (SQLite). No cloud, no account,
+  no telemetry. Append-only events guarded by immutability triggers.
+- **Zero special permissions** — attribution is intent-based (which session you submit
+  to / which activity you start), so Kairos never reads window titles and needs no
+  Accessibility or Automation access.
+- **Native, not Electron** — a Swift menu-bar app with a small Rust core; even the
+  Claude Code plugin is a single native binary (no Node runtime, no shelling out to
+  `jq`/`python`). The app is ~3 MB on disk and ~45 MB resident at idle (per Activity
+  Monitor); the plugin adds
+  nothing resident — it runs only on hook events and exits in milliseconds.
+
+## Installation
+
+### 1. The app
+
+1. Download **Kairos.app** from the latest [Release](https://github.com/flowjzh/kairos/releases).
+2. Drag it into **Applications** and launch it. A Kairos icon appears in the menu bar.
+3. (Optional) Enable **Launch at login** from the menu-bar menu to autostart.
+
+> No build step, no toolchain — the Release ships a signed, ready-to-run app.
+
+### 2. The `kairos` CLI *(optional)*
+
+From the menu bar → **Configure → General → Command-Line Tool → Install**. This
+symlinks `kairos` onto your PATH (one admin prompt), giving you the shell interface:
+
+```sh
+kairos --help                  # clients, projects, activities, export, …
+```
+
+The CLI also **wraps any terminal command** — launching it as `kairos <command>` lets
+Kairos track when that terminal is in focus, so its active time is recorded:
+
+```sh
+kairos vim main.rs             # any command you actively work in — focus/blur is captured
+kairos ssh prod
+```
+
+(See [Timesheets](#timesheets) to export attributed time.)
+
+### 3. The Claude Code plugin *(optional)*
+
+Track AI coding sessions automatically. In the app, open **Configure → Plugins → Claude
+Code** and click **Register** (this makes Kairos's bundled plugin known to Claude Code).
+Then install it — pick a scope:
+
+```sh
+claude plugin install kairos-claude-code@kairos --scope user   # or: project | local
+```
+
+The plugin ships **inside the app** (a native binary, no download); Claude Code copies it
+into its own cache on install, and you manage it with `claude plugin update` / `uninstall`.
+Each session shows up as a project (its folder name); tag that project's client once in
+**Configure…** and it applies retroactively.
+
+The plugin's job is to split each session into **AI-execution** time (the agent
+running) vs **human** time (you reading, thinking, prompting), using the agent's
+submit/stop markers. On its own that split is **coarse**: during the human windows it
+can't tell whether you were focused on *this* session or had switched to another
+window. For precise attribution, launch Claude through the wrapper so the terminal's
+focus on the session is recorded too:
+
+```sh
+kairos claude        # pairs the plugin's AI/Human split with real focus on this session
+```
+
+Now, within the human window, only the time your terminal was genuinely on that
+session counts as interaction with it.
+
+Each session's activity also carries its Claude **session id** as an `external_id`, so a
+timesheet can pinpoint exactly which session a block of time belonged to — see
+[Timesheets](#timesheets).
+
+## Privacy
+
+Kairos is local-first: all data lives in a SQLite file on your machine
+(`~/Library/Application Support/Kairos/kairos.db`). There is no cloud, no account, and
+no telemetry — nothing leaves your Mac. It needs **no Accessibility or Automation
+permissions**: because attribution is intent-based (which session you submit to, which
+activity you start), Kairos never reads window titles or inspects other apps.
+
+## Screenshots
+
+*(Coming soon — the Dashboard window, menu-bar flyout, and config panel.)*
 
 ## Status
 
-**M1 + M2 implemented** (macOS 14+): the resident menu-bar daemon, the line-JSON protocol, explicit-bounds **and** AI submit-anchored attribution, the `kairos` CLI, a SwiftUI config window, and the `kairos-claude-code` Claude Code plugin. Snapshots and the reference Python summarizer are M3. See [roadmap](./docs/09-roadmap.md).
+**M1 + M2**: the resident menu-bar daemon, the line-JSON protocol, explicit-bounds and
+AI submit-anchored attribution, the `kairos` CLI, a SwiftUI config window, the Claude
+Code plugin, and the Dashboard. Snapshots and the reference Python summarizer are next.
 
-## Quickstart
+**Platform:** macOS today; the data plane (the Rust reducer + the web dashboard) is
+built to port, with a Windows host on the roadmap. See [roadmap](./docs/09-roadmap.md).
 
-```sh
-make test                 # Swift Testing suite (no Xcode required)
-make app                  # build + assemble Kairos.app (release, stripped, ad-hoc signed)
-make app ARCH=arm64       # cross-build for Apple Silicon → build/arm64/ (won't run on Intel)
-swift run KairosDaemon    # run the daemon directly — a menu-bar item appears
-make install              # install Kairos.app + an opt-in LaunchAgent (not started)
-make start                # start the release daemon on demand (make stop to stop)
-```
+## How it works
 
-The daemon opens `~/Library/Application Support/Kairos/kairos.db`, listens on `~/.kairos/daemon.sock`, and samples idle (60s threshold). Ingest requests that arrive while it is down are spooled to `~/.kairos/spool/` and drained on startup. The runtime dir is overridable via `$KAIROS_RUNTIME_DIR` (socket + spool); the store path is baked into the app bundle (the daemon reads a `KairosDataDir` Info.plist key, defaulting to `~/Library/Application Support/Kairos`). This is how the dev and release instances stay isolated (below).
+A lean resident daemon samples idle and ingests events from clients over a local socket
+into an append-only SQLite log — the sole source of truth. Segments (attributed
+active-time blocks) are **computed on demand**, never stored. Clients are external
+processes (the Claude Code plugin, the `kairos` CLI, anything you write); consumers read
+segments out via the SDK to render timesheets. See
+[Architecture](./docs/02-architecture.md) for the full design.
 
-The `kairos` CLI ships inside `Kairos.app`; enable it on your shell PATH from **Configure → General → Command-Line Tool** (symlinks `/usr/local/bin/kairos`, one admin prompt). `make install` also links `~/.local/bin/kairos` to the repo build for local development.
+## Timesheets
 
-### Dev vs release
+Attributed time is read out over the same socket the daemon serves — segments are
+computed on demand from the event log, never stored, so a timesheet is always live and
+exact.
 
-Develop against a **separate daemon, socket, and database** so wiping the dev DB never touches real freelance data — and run both instances at once:
-
-```sh
-make install-dev          # install Kairos Dev.app (distinct bundle id)
-make start-dev            # start the dev daemon (uses ~/.kairos-dev + …/Kairos-dev)
-make dev                  # or: rebuild + open the dev app directly (quick debug loop)
-make clean-dev            # wipe ONLY the dev runtime + DB — release is untouched
-```
-
-The daemon code has no notion of "dev" — it reads `$KAIROS_RUNTIME_DIR` (runtime) and the bundle's `KairosDataDir` key (data), else the release defaults. The dev/release difference lives entirely in the build: `make install-dev` bakes the `-dev` dirs into the dev app's bundle (`KAIROS_RUNTIME_DIR` via `LSEnvironment`; the data dir as a `KairosDataDir` Info.plist key), so double-click / `make dev` / `make start-dev` all reach the dev instance. To point *this repo's* Claude plugin + `kairos claude` at the dev daemon, set the runtime dir for the session (the hook reads only `$KAIROS_RUNTIME_DIR` — it never touches the DB):
-
-```jsonc
-// .claude/settings.local.json (gitignored) — routes direct `claude` here to dev
-{ "env": {
-    "KAIROS_RUNTIME_DIR": "/Users/you/.kairos-dev"
-} }
-```
+**Quick — `kairos export`:**
 
 ```sh
-# and export the same for `kairos claude` in a dev shell
-export KAIROS_RUNTIME_DIR=~/.kairos-dev
+kairos export --from 0 --to 9999999999 | jq .   # client-grouped, attributed segments
 ```
 
-Both LaunchAgents are opt-in (`RunAtLoad=false`): the daemon runs only when you `make start`. Flip `RunAtLoad` to `true` in the plist to autostart at login.
+**Richer — the Python SDK** (`sdk/python`, dependency-free) speaks the line-JSON protocol
+directly. A single `segments.get` round-trip returns every segment in the range (no
+pagination), each carrying the afk/pause-subtracted human `seconds` and a joined activity:
 
-```sh
-kairos client add "Acme"                            # prints the new client id
-kairos map set --project daemonclaw --client 1      # tag a project's client (retroactive)
-kairos activity open --source manual --id api-review --project daemonclaw --title "API review"
-kairos activity close --source manual --id api-review
-kairos export --from 0 --to 9999999999 | jq .       # client-grouped, attributed segments
+```python
+from kairos_sdk import Kairos
+
+kairos = Kairos()                               # ~/.kairos/daemon.sock
+for s in kairos.segments(from_ts, to_ts, client=1):
+    print(s.seconds, s.activity.project, s.activity.external_id)
 ```
 
-Meetings and ad-hoc tasks can also be logged from the menu bar → **Configure…** (start/stop, direct client). Attribution is recomputed on every read: a manual `pause` holes explicit time, while `afk` does not (explicit is afk-immune). AI sessions use submit-anchored windows (`[open | ai_stop, ai_submit]`), which afk *does* hole.
-
-## Claude Code plugin
-
-Track AI coding sessions by installing the bundled plugin. It hooks `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` and shells out to a small native binary that reports to the daemon (fire-and-forget, spooled if the daemon is down).
-
-```sh
-make plugin                                   # build + stage bin/kairos-claude-code
-```
-
-**Dev (per session):** `claude --plugin-dir plugins/claude-code`
-
-**Formal (persists across sessions)** via the bundled local marketplace:
-
-```sh
-claude plugin marketplace add "$(pwd)"        # register this repo as a marketplace
-claude plugin install kairos-claude-code@kairos
-```
-
-The formal install copies the plugin (binary included) into Claude's own cache — separate from `Kairos.app`, which holds the daemon. After rebuilding the binary, re-run `make plugin` then `claude plugin install …` again (or `/reload-plugins`) to refresh the cached copy.
-
-Each session auto-appears as a project (its cwd basename); tag that project's client once in **Configure…** and it applies retroactively. Human-work time (reading, thinking, prompting between the agent stopping and your next submit) is attributed to the session; AI-execution time is excluded.
-
-
-## Dashboard
-
-**Dashboard…** (menu bar) opens a window over your attributed time: a per-source timeline (each source a translucent area, with the total overlaid as a line) above two tabs — raw segments (paged) and a client → project summary tree. The range picker (Today / This Week / This Month / Custom) drives one in-process attribution pass, memoized so the chart, summary, and paged rows share it.
-
-The data plane is cross-platform: a pure Rust reducer (`libs/report`) folds already-attributed segments into the chart/summary/page shapes, surfaced to the Swift daemon through one general C-ABI boundary (`ffi/` → `libkairos_ffi.a`). The rendering is a Vite + React + shadcn web app (`dashboard/`) hosted in a WKWebView; the same web bundle + reducer are reused unchanged when a Windows host (`wry`/Tauri) is added later.
-
-**Front-end dev loop** (HMR, no re-bundle): the dashboard's default URL is the bundled `kairos://dashboard/index.html`, so it always renders. To debug against the Vite dev server instead, set `KAIROS_DASHBOARD_URL` and launch the binary directly (launching the binary — not `open` — is what lets the env reach the process). Works for whichever bundle's data you want to debug:
-
-```sh
-cd dashboard && pnpm install && pnpm dev    # Vite at http://localhost:5173
-
-# Debug the dev bundle (reads ~/.kairos-dev data). KAIROS_RUNTIME_DIR keeps the
-# dev socket/spool isolated when launching the binary directly (normally baked
-# into the bundle's LSEnvironment, which only `open` applies).
-KAIROS_DASHBOARD_URL=http://localhost:5173 KAIROS_RUNTIME_DIR=~/.kairos-dev \
-  "build/$(uname -m)/Kairos Dev.app/Contents/MacOS/Kairos"
-
-# Or the release bundle (reads the real ~/.kairos data):
-KAIROS_DASHBOARD_URL=http://localhost:5173 /Applications/Kairos.app/Contents/MacOS/Kairos
-```
-
-The dev app's WKWebView is inspectable: Safari → Develop → [machine] → Kairos (Dev) → Dashboard.
-
-
-## Architecture in one breath
-
-```
-   resident daemon (lean)                          events (append-only,
-   ┌────────────────────────┐   events.post         sole source of truth)
-   │ idle sampler ──────────┼──────────────────▶  ┌──────────────────────┐
-   │ socket ingest ◀────────┼── clients (any lang)│  ~/.kairos/kairos.db  │
-   │ menu-bar (owner view)  │                      └──────────┬───────────┘
-   └────────────────────────┘                                 │ read-time
-                                                              ▼
-                                              KairosCore (daemon-internal;
-                                              computes segments on demand —
-                                              nothing materialized)
-                                                              │
-              segments.get  ──or──  `kairos export`  ────────┘  → JSON
-                                                              │
-   external consumers (Python/Node SDK): per-client timesheets,
-   API delivery, LLM summaries — all outside the core.
-```
-
-- **`kairosd`** — a lean Swift `LaunchAgent` daemon. Its *only* resident jobs: sample system idle → append AFK events, accept client events over a local socket, host a menu-bar status item. **Zero special permissions** (no Accessibility, no Automation).
-- **Events are the sole source of truth.** Segments (attributed active-time blocks) are **computed on demand** by the daemon-internal attribution library (`KairosCore`) — never stored/materialized, and not exposed via FFI.
-- **Clients** are external processes that speak the protocol (line-JSON RPC over a Unix socket, or the `kairos` CLI). `kairos-claude-code` is a Claude Code plugin reporting `Stop` / `UserPromptSubmit`. Writing a new client in any language extends what Kairos tracks.
-- **Consumers** read segments via the **Python/Node SDK** (or `kairos export`) and render timesheets. Formatting, per-client templates, and API delivery live **outside the core**.
+Each activity carries an **`external_id`** — for Claude Code sessions, the session id —
+so a timesheet can pinpoint exactly which session a block of time belonged to (and, via
+the activity's `transcript_path`, what was being done). Any language works: open the
+socket, write one `segments.get` request line, read one response line — see
+[docs/05-protocol.md](./docs/05-protocol.md).
 
 ## Documentation
 
-1. [Overview & principles](./docs/01-overview.md) — the problem, the thesis, permissions & privacy
-2. [Architecture](./docs/02-architecture.md) — components, data flow, process model
-3. [Data model](./docs/03-data-model.md) — SQLite schema; events as truth, segments computed, snapshot recipes
-4. [Attribution](./docs/04-attribution.md) — how active time is assigned to activities *(the core)*
-5. [Protocol](./docs/05-protocol.md) — the language-agnostic client/consumer interface (socket + CLI)
-6. [Daemon design](./docs/06-daemon.md) — idle kernel, socket server, menu bar, launchd
-7. [Clients](./docs/07-clients.md) — `kairos-claude-code`, manual/meeting, the extension model
-8. [Consumers & summarizer](./docs/08-summarizer.md) — timesheet generation as an external concern
-9. [Roadmap](./docs/09-roadmap.md) — milestones, MVP scope, open decisions, ADRs
+1. [Overview & principles](./docs/01-overview.md)
+2. [Architecture](./docs/02-architecture.md)
+3. [Data model](./docs/03-data-model.md)
+4. [Attribution](./docs/04-attribution.md) *(the core)*
+5. [Protocol](./docs/05-protocol.md)
+6. [Daemon design](./docs/06-daemon.md)
+7. [Clients](./docs/07-clients.md)
+8. [Consumers & summarizer](./docs/08-summarizer.md)
+9. [Roadmap](./docs/09-roadmap.md)
+
+## Contributing
+
+Building from source, the dev/release isolation, the dashboard HMR loop, and the release
+process are in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-TBD (see [roadmap](./docs/09-roadmap.md)).
+[MIT](./LICENSE) — © Flow Jiang.
