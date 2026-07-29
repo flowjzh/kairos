@@ -20,7 +20,7 @@ The daemon is usable for non-AI timesheets before any Claude integration exists.
 
 *Implemented* (attribution + reducer + plugin + read-path hardening); multi-session verification against real Claude work is the remaining exit check.
 
-- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) — a small native binary (the hook→RPC mapping + shared `kairos-client` transport; Rust as of M4p2) that maps hook JSON to generic RPCs and speaks the socket directly (spool fallback), keeping the `kairos` CLI agent-agnostic.
+- `kairos-claude-code` plugin (hooks: `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, plus `PreToolUse`/`PostToolUse` matched to the human-input tools `AskUserQuestion`/`ExitPlanMode` → `ai_stop`/`ai_submit` so a Q&A or plan-review turn doesn't read as one long grind) — a small native binary (the hook→RPC mapping + shared `kairos-client` transport; Rust as of M4p2) that maps hook JSON to generic RPCs and speaks the socket directly (spool fallback), keeping the `kairos` CLI agent-agnostic.
 - **AI submit-anchored** strategy in the registry: closed `[activity_open | ai_stop, ai_submit]` windows, resolved by submit-priority (nesting); open tails not counted; AI-execution excluded; afk/pause hole the windows (with the afk-submit-break); explicit-vs-ai holing.
 - AI-agent projects auto-appear; tag each to a client once in the config window.
 - Multi-session verification (several Ghostty splits); `force_owner` exercised.

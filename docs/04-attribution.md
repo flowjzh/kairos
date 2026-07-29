@@ -91,8 +91,17 @@ The meeting counts its full span except the 5-minute Claude dip; Claude counts o
 focus(A) … you work in A … focus(B)   → A ends at focus(B); B begins. blur(A) (from A's wrapper) is a no-op.
 ```
 
+**Grilling / plan review — human-input tools (`AskUserQuestion`, `ExitPlanMode`):** these are the only tools whose execution blocks on a human response, so the claude-code client emits `ai_stop` on their `PreToolUse` (agent done, waiting) and `ai_submit` on their `PostToolUse` (human answered/approved, agent resumes). Without those markers a single turn that asks 100 questions — or awaits plan approval — is one `[ai_submit, ai_stop]` grind, deducting hours you spent reading and answering as if you were idle. With them, only each real agent-generation burst is grind; your deliberation stays in focus:
+```
+10:00 ai_submit          you prompt → grind starts
+10:00 ai_stop            agent asks Q1 / shows plan (PreToolUse) → grind closes
+10:03 ai_submit          you answer / approve (PostToolUse) → grind reopens
+10:03 ai_stop            agent asks Q2 → … (your 10:00–10:03 reading/answering counts as focus)
+```
+
 ## Known limits (honest)
 
+- **Permission-prompt wait is not separated from grind.** When a tool call requires human approval (the permission dialog), the time you spend deciding is human deliberation but is NOT marked — `PreToolUse` fires *before* the prompt and there is no post-decision hook, so it stays inside the grind. Only the explicit human-input tools (`AskUserQuestion`, `ExitPlanMode`) are split. Moot under `--dangerously-skip-permissions` (no prompts).
 - **Un-asserted background work is not counted.** Tab to a browser without a manual focus (and with no manual backdrop) → the pointer drops to none and that time is unattributed. This is deliberate: "default don't count unless focused or manually asserted" (ADR 32) — the system cannot tell research from slacking, so the burden of asserting research is on you.
 - **A `kill -9`'d wrapper can briefly over-count.** If a wrapper dies without its exit `blur`, and you neither focus something else nor go idle, its activity keeps counting until the next focus/afk. Narrow and afk-bounded; not worth a heartbeat (ADR, M4p3 Q7).
 - **Auto-catch to the wrong backdrop.** With >1 active manual, auto-catch guesses the most-recently-focused and notifies; a wrong guess is one manual click to correct (which is itself a `focus` event).

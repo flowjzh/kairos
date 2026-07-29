@@ -98,7 +98,8 @@ submit-anchored windows (`[open | ai_stop, ai_submit]`), which afk *does* hole. 
 `plugins/claude-code/` is a **self-contained local marketplace**: its
 `.claude-plugin/marketplace.json` names one plugin with `source: "."`, so the directory
 *is* both the marketplace and the plugin (`plugin.json` + `hooks/hooks.json`). The hooks
-(`SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd`) call the native binary
+(`SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd`, plus `PreToolUse`/`PostToolUse`
+matched to the human-input tools `AskUserQuestion`/`ExitPlanMode`) call the native binary
 directly at `${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code` — no shell shim, no download.
 
 `make app`/`make app-dev` bundle this tree (with the freshly built binary) into the app at

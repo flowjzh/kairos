@@ -9,6 +9,12 @@
     "Stop": [
       { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
+    ],
     "SessionEnd": [
       { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code", "args": [] }] }
     ]

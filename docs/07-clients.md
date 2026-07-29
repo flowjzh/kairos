@@ -6,7 +6,7 @@ This is the extension model: **new sources = new external clients speaking the p
 
 ## `kairos-claude-code` — Claude Code plugin
 
-Registered as a Claude Code plugin (`plugins/claude-code/`): a `.claude-plugin/plugin.json` plus a `hooks/hooks.json` that wires the four lifecycle hooks directly to one small **native binary** (`${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code`) — no shell shim. The binary reads the hook JSON from stdin, maps it to a generic RPC, and writes the socket directly (reusing the shared Rust `kairos-client` transport + spool) — no `jq`/`python` spawn, no shelling to the `kairos` CLI. It always exits 0. (M4p2: the binary is Rust.) Fire-and-forget: Claude hooks must never block, and the spool fallback covers a down daemon.
+Registered as a Claude Code plugin (`plugins/claude-code/`): a `.claude-plugin/plugin.json` plus a `hooks/hooks.json` that wires the four lifecycle hooks (plus the human-input tool hooks `AskUserQuestion`/`ExitPlanMode` — see below) directly to one small **native binary** (`${CLAUDE_PLUGIN_ROOT}/bin/kairos-claude-code`) — no shell shim. The binary reads the hook JSON from stdin, maps it to a generic RPC, and writes the socket directly (reusing the shared Rust `kairos-client` transport + spool) — no `jq`/`python` spawn, no shelling to the `kairos` CLI. It always exits 0. (M4p2: the binary is Rust.) Fire-and-forget: Claude hooks must never block, and the spool fallback covers a down daemon.
 
 Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd basename`, …) in the plugin's own binary is deliberate: the `kairos` CLI stays **agent-agnostic** (ADR 12/20). A different agent ships its own binary with its own mapping.
 
@@ -19,7 +19,11 @@ Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd bas
 | `SessionStart` | `activities.start` `{source: claude-code, external_id: session_id, project: cwd-basename, metadata: {transcript_path, cwd}}` (create-or-resume; sets state=active) |
 | `UserPromptSubmit` | `events.post` `{activity, kind: ai_submit}` |
 | `Stop` | `events.post` `{activity, kind: ai_stop}` |
+| `PreToolUse` (`AskUserQuestion`, `ExitPlanMode`) | `events.post` `{activity, kind: ai_stop}` — the agent finished its turn and is waiting on the human |
+| `PostToolUse` (`AskUserQuestion`, `ExitPlanMode`) | `events.post` `{activity, kind: ai_submit}` — the human answered/approved; the agent resumes |
 | `SessionEnd` | `activities.stop` `{source, external_id: session_id}` (sets state=stopped) |
+
+The `PreToolUse`/`PostToolUse` entries carry `matcher`s for the **human-input tools** — `AskUserQuestion` (answering a question) and `ExitPlanMode` (approving a plan), the only built-ins whose execution blocks on a human response. (`EnterPlanMode` is excluded: it's an instant mode flip, no human wait.) Each such call is a pause in the grind: a long back-and-forth ("grilling") or plan-review turn would otherwise be a single `[ai_submit, ai_stop]` span that deducts the human's reading/answering/approving time as idle AI wait. Splitting each ask into `ai_stop`…`ai_submit` returns that deliberation to focus, leaving only the real agent-generation bursts as grind. The matchers are an optimisation to avoid spawning the binary on every tool call; the binary re-checks `tool_name` against the same set (`HUMAN_INPUT_TOOLS` in `hook.rs`, which is the source of truth — keep the two in sync).
 
 The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly what the daemon needs (no window/title introspection, hence no Accessibility). The claude-code client reports **only `project`** (the cwd basename); it never needs to know the billing client — that is resolved later via the project→client mapping. Note (M4p3): `SessionStart`/`SessionEnd` no longer emit timing events — timing is the wrapper's `focus`/`blur`; the hooks only declare identity + lifecycle and the `ai_submit`/`ai_stop` deduction markers.
 
