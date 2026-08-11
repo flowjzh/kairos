@@ -122,4 +122,43 @@ struct StoreOpsTests {
         #expect(active[0].title == "客户会议")
         #expect(active[0].source == "manual")
     }
+
+    @Test
+    func resumeUpdatesTitleWhenGiven() async throws {
+        let s = try store()
+        let id = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: "First", metadata: nil)
+        // Resume with a new title → renames the existing row.
+        _ = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: "Renamed", metadata: nil)
+        #expect(try await s.loadActivity(id: id)?.title == "Renamed")
+    }
+
+    @Test
+    func resumeWithoutTitlePreservesExistingTitle() async throws {
+        let s = try store()
+        let id = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: "Named", metadata: nil)
+        // Resume with no title (e.g. `kairos claude` without `--title`) → keeps "Named".
+        _ = try await s.startActivity(source: "claude-code", externalId: "sess-1", project: nil, title: nil, metadata: nil)
+        #expect(try await s.loadActivity(id: id)?.title == "Named")
+    }
+
+    // adoptOrStart is the path the CC hook's activities.start actually takes
+    // (Design B reconciliation) — title-on-resume must work here too, not just in
+    // startActivity. Regression for the resume path that ships the title through.
+    @Test
+    func adoptOrStartResumeUpdatesTitle() async throws {
+        let s = try store()
+        _ = try await s.adoptOrStart(shellId: nil, source: "claude-code", externalId: "sess-1", project: nil, title: "First", metadata: nil)
+        _ = try await s.adoptOrStart(shellId: nil, source: "claude-code", externalId: "sess-1", project: nil, title: "Renamed", metadata: nil)
+        let id = try await s.findActivity(source: "claude-code", externalId: "sess-1")!
+        #expect(try await s.loadActivity(id: id)?.title == "Renamed")
+    }
+
+    @Test
+    func adoptOrStartResumeWithoutTitlePreserves() async throws {
+        let s = try store()
+        _ = try await s.adoptOrStart(shellId: nil, source: "claude-code", externalId: "sess-1", project: nil, title: "Named", metadata: nil)
+        _ = try await s.adoptOrStart(shellId: nil, source: "claude-code", externalId: "sess-1", project: nil, title: nil, metadata: nil)
+        let id = try await s.findActivity(source: "claude-code", externalId: "sess-1")!
+        #expect(try await s.loadActivity(id: id)?.title == "Named")
+    }
 }

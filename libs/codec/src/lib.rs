@@ -49,6 +49,8 @@ pub enum Method {
     SegmentsGet,
     #[serde(rename = "focused.get")]
     FocusedGet,
+    #[serde(rename = "activities.status")]
+    ActivitiesStatus,
 }
 
 /// Error carried in a `{"error":{"code","message"}}` response.

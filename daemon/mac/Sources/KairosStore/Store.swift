@@ -164,13 +164,17 @@ public actor Store {
     /// Create-or-resume an activity (M4p3): idempotent on `(source, external_id)`.
     /// A matching row (e.g. an `archived` claude session resumed by the same
     /// `claude_sid`) is flipped back to `visible` and returned; a NULL
-    /// `externalId` (menu/manual) always creates a new row. Writes **no event** —
+    /// `externalId` (menu/manual) always creates a new row. On resume, a non-nil
+    /// `title` updates the row (so `kairos --title` on a resumed session renames
+    /// it); a nil title leaves any existing title intact (a resume without
+    /// `--title` doesn't wipe a previously-set name). Writes **no event** —
     /// timing/placement is derived from `focus`/`blur`; `state` is just visibility.
     public func startActivity(source: String, externalId: String?, project: String?, title: String?, metadata: Data?) throws -> Int64 {
         let sourceId = try resolveSource(slug: source)
         let projectId = try project.map { try resolveProject(slug: $0) }
         if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
             try setActivityState(activityId: existing, .visible)
+            if let title { try setActivityTitle(activityId: existing, title) }
             return existing
         }
         return try insertActivity(sourceId: sourceId, externalId: externalId, projectId: projectId, title: title, metadata: metadata)
@@ -196,6 +200,15 @@ public actor Store {
     public func setActivityState(activityId: Int64, _ state: ActivityState) throws {
         let stmt = try db.prepare("UPDATE activities SET state=? WHERE id=?")
         try stmt.bind([.int(Int64(state.rawValue)), .int(activityId)])
+        _ = try stmt.step()
+        signalChange()
+    }
+
+    /// Rename an activity (the resume path uses this when a `--title` is given).
+    /// Mutable, not watermarked — like `state`, title is plain display metadata.
+    private func setActivityTitle(activityId: Int64, _ title: String) throws {
+        let stmt = try db.prepare("UPDATE activities SET title = ? WHERE id = ?")
+        try stmt.bind([.text(title), .int(activityId)])
         _ = try stmt.step()
         signalChange()
     }
@@ -242,6 +255,7 @@ public actor Store {
         }
         if let externalId, let existing = try findActivity(source: source, externalId: externalId) {
             try setActivityState(activityId: existing, .visible)
+            if let title { try setActivityTitle(activityId: existing, title) }
             if let shell, shell != existing { try setActivityState(activityId: shell, .archived) }
             return existing
         }
@@ -486,6 +500,16 @@ public actor Store {
     public func loadActivity(id: Int64) throws -> ActivityRecord? {
         let stmt = try db.prepare("\(Self.activitySelect) WHERE a.id = ?")
         try stmt.bind([.int(id)])
+        guard try stmt.step() else { return nil }
+        return readActivityRow(stmt)
+    }
+
+    /// Look up an activity by `(source, external_id)` in one query — used by the
+    /// statusline handler, which runs per event and would otherwise pay two
+    /// serialized-actor hops (`findActivity` + `loadActivity(id:)`).
+    public func loadActivity(source: String, externalId: String) throws -> ActivityRecord? {
+        let stmt = try db.prepare("\(Self.activitySelect) WHERE s.slug = ? AND a.external_id = ?")
+        try stmt.bind([.text(source), .text(externalId)])
         guard try stmt.step() else { return nil }
         return readActivityRow(stmt)
     }

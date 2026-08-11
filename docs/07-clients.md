@@ -16,7 +16,7 @@ Keeping the Claude Code-specific mapping (`Stop → ai_stop`, `project = cwd bas
 
 | Claude hook | What the client does |
 |---|---|
-| `SessionStart` | `activities.start` `{source: claude-code, external_id: session_id, project: cwd-basename, metadata: {transcript_path, cwd}}` (create-or-resume; sets state=active) |
+| `SessionStart` | `activities.start` `{source: claude-code, external_id: session_id, project: cwd-basename, title: $KAIROS_ACTIVITY_TITLE, metadata: {transcript_path, cwd}}` (create-or-resume; sets state=active). `title` is set only when the wrapper passed `--title` (see below); otherwise NULL and the menu/statusline falls back to `project ?? source`. |
 | `UserPromptSubmit` | `events.post` `{activity, kind: ai_submit}` |
 | `Stop` | `events.post` `{activity, kind: ai_stop}` |
 | `PreToolUse` (`AskUserQuestion`, `ExitPlanMode`) | `events.post` `{activity, kind: ai_stop}` — the agent finished its turn and is waiting on the human |
@@ -30,6 +30,14 @@ The hook payload provides `session_id`, `cwd`, and `transcript_path` — exactly
 **Under `kairos` (M4p2 / M4p3).** When Claude is launched as `kairos claude` (the PTY fallback — any non-subcommand on `PATH` is wrapped), the wrapper sets `KAIROS_SESSION_ID` (kid); the hook binary reads it and adds `kairos_session_id` to **every** RPC above. The daemon uses it to keep an ephemeral `kid → activity` map fresh, so it can attribute the wrapper's `focus.report` transitions as `focus`/`blur`. Since **M4p3** the wrapper is also the **first axis for activity creation** (Design B): it emits a launch `focus`, and after ~5 s an `activities.ensure` that creates a `source=pty` activity **only if** no hook has claimed the kid — so wrapping a non-agent command (`kairos vim`) yields an activity, while for `kairos claude` the `SessionStart` hook has already created the `claude-code` activity and the ensure is a no-op (the hook *enriches*, it does not open a competing activity). Unwrapped sessions omit the field and behave as before. See [05](./05-protocol.md), [09](./09-roadmap.md).
 
 **Wrapping non-agent commands (`kairos vim`, `kairos ssh`).** Any command with no hooks is tracked purely by the wrapper: launch `focus` + 5 s `activities.ensure` (`source=pty`) + exit `blur` and `activities.stop`. Its time is `focus − afk − pause` (no `ai_*` deductions).
+
+**Naming the activity — `--title`.** `kairos --title "Foo" <cmd>` (composes with `--project`, in any order) exports `KAIROS_ACTIVITY_TITLE` to the child; the claude-code hook picks it up at `SessionStart` and records it as the activity `title` (first insert only — a resumed session keeps its original title). Without `--title` the env stays unset, so a `claude-code` activity's title is NULL and surfaces fall back to `project ?? source` (unchanged behavior). For a non-agent wrap (`kairos --title Foo vim`) the title names the `pty` activity (defaulting to the command string when no `--title`).
+
+**Status line.** The same binary doubles as a CC status line command via `kairos-claude-code statusline`: it reads the statusline JSON's `session_id` from stdin, queries `activities.status`, and prints one colored line (`身份 | 状态 | 总计:Xh | 今天:Yh`). To use it, add to your Claude Code settings (any scope — `statusLine` has no scope restriction):
+```json
+"statusLine": { "type": "command", "command": "/Applications/Kairos.app/Contents/Resources/plugins/claude-code/bin/kairos-claude-code statusline", "refreshInterval": 15 }
+```
+Set `refreshInterval` so idle/gracing state and durations stay current between events (the line otherwise refreshes only on assistant messages / mode changes). The `kairos-statusline` render crate is shared, so other agents can reuse it.
 
 ### Responsibilities & non-responsibilities
 

@@ -24,7 +24,7 @@ pub struct HookInput {
     pub tool_name: Option<String>,
 }
 
-const SOURCE: &str = "claude-code";
+pub const SOURCE: &str = "claude-code";
 
 /// Tools that hand control to the human mid-turn: the agent emits the call,
 /// then idles while the person reads, thinks, and answers. Each such tool is a
@@ -45,13 +45,23 @@ const HUMAN_INPUT_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode"];
 /// Map a hook event to a Kairos RPC, or `None` if it isn't one we track (the
 /// caller exits 0 regardless — never disrupt Claude). `kairos_session_id` is the
 /// wrapping `kairos` PTY session, if any (M4); it rides on every RPC so the
-/// daemon can keep its focus map fresh. Encode failures also yield `None`.
-pub fn request(input: &HookInput, kairos_session_id: Option<&str>, now: f64) -> Option<RequestEnvelope> {
+/// daemon can keep its focus map fresh. `title` is the `--title` the wrapper
+/// passed via `KAIROS_ACTIVITY_TITLE`, if any — applied only at `SessionStart`,
+/// and only when non-empty (an absent/empty title leaves the column NULL, so
+/// `kairos claude` with no `--title` keeps today's behavior). Encode failures
+/// also yield `None`.
+pub fn request(
+    input: &HookInput,
+    kairos_session_id: Option<&str>,
+    title: Option<&str>,
+    now: f64,
+) -> Option<RequestEnvelope> {
     let activity = ActivityRef {
         source: SOURCE.into(),
         external_id: Some(input.session_id.clone()),
     };
     let kid = kairos_session_id.map(str::to_string);
+    let title = title.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
     match input.hook_event_name.as_str() {
         "SessionStart" => {
             let project = input.cwd.as_ref().map(|c| basename(c));
@@ -66,7 +76,7 @@ pub fn request(input: &HookInput, kairos_session_id: Option<&str>, now: f64) -> 
                 source: SOURCE.into(),
                 external_id: Some(input.session_id.clone()),
                 project,
-                title: None,
+                title,
                 metadata: if metadata.is_empty() { None } else { Some(metadata) },
                 kairos_session_id: kid,
                 afk_immune: None,
@@ -155,7 +165,7 @@ mod tests {
 
     #[test]
     fn session_start_opens_activity_with_project_from_cwd() {
-        let req = request(&default_input("SessionStart"), None, 100.0).unwrap();
+        let req = request(&default_input("SessionStart"), None, None, 100.0).unwrap();
         assert_eq!(req.method, Method::ActivitiesStart);
         let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.source, "claude-code");
@@ -163,11 +173,35 @@ mod tests {
         assert_eq!(p.project.as_deref(), Some("daemonclaw"));
         assert_eq!(p.metadata.as_ref().unwrap().get("transcript_path").and_then(|v| v.as_str()), Some("/tmp/t.jsonl"));
         assert_eq!(p.metadata.as_ref().unwrap().get("cwd").and_then(|v| v.as_str()), Some("/Users/me/Desktop/daemonclaw"));
+        // No `--title` (title=None) → column stays NULL (today's behavior).
+        assert!(p.title.is_none());
+    }
+
+    #[test]
+    fn session_start_uses_kairos_activity_title() {
+        let req = request(&default_input("SessionStart"), None, Some("My Task"), 100.0).unwrap();
+        let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
+        assert_eq!(p.title.as_deref(), Some("My Task"));
+    }
+
+    #[test]
+    fn session_start_title_trimmed_and_empty_ignored() {
+        // Whitespace is trimmed; an empty/whitespace-only title is treated as absent.
+        let req = request(&default_input("SessionStart"), None, Some("  Spaced  "), 1.0).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ActivitiesStartParams>(req.params).unwrap().title.as_deref(),
+            Some("Spaced")
+        );
+        let req = request(&default_input("SessionStart"), None, Some("   "), 1.0).unwrap();
+        assert!(
+            serde_json::from_value::<ActivitiesStartParams>(req.params).unwrap().title.is_none(),
+            "whitespace-only title must not be set"
+        );
     }
 
     #[test]
     fn user_prompt_submit_posts_ai_submit() {
-        let req = request(&default_input("UserPromptSubmit"), None, 250.0).unwrap();
+        let req = request(&default_input("UserPromptSubmit"), None, None, 250.0).unwrap();
         assert_eq!(req.method, Method::EventsPost);
         let p: EventsPostParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.kind, "ai_submit");
@@ -177,14 +211,14 @@ mod tests {
 
     #[test]
     fn stop_posts_ai_stop() {
-        let req = request(&default_input("Stop"), None, 300.0).unwrap();
+        let req = request(&default_input("Stop"), None, None, 300.0).unwrap();
         let p: EventsPostParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.kind, "ai_stop");
     }
 
     #[test]
     fn session_end_closes_activity() {
-        let req = request(&default_input("SessionEnd"), None, 400.0).unwrap();
+        let req = request(&default_input("SessionEnd"), None, None, 400.0).unwrap();
         assert_eq!(req.method, Method::ActivitiesStop);
         let p: ActivitiesStopParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.external_id.as_deref(), Some("sess-1"));
@@ -193,7 +227,7 @@ mod tests {
 
     #[test]
     fn unknown_event_is_ignored() {
-        assert!(request(&default_input("Notification"), None, 0.0).is_none());
+        assert!(request(&default_input("Notification"), None, None, 0.0).is_none());
     }
 
     #[test]
@@ -206,7 +240,7 @@ mod tests {
         ] {
             let mut input = default_input(event);
             input.tool_name = Some(tool.into());
-            let req = request(&input, None, 100.0).unwrap();
+            let req = request(&input, None, None, 100.0).unwrap();
             let p: EventsPostParams = serde_json::from_value(req.params).unwrap();
             assert_eq!(p.kind, kind, "{event}/{tool}");
             assert_eq!(p.ts, 100.0);
@@ -242,7 +276,7 @@ mod tests {
         for event in ["PreToolUse", "PostToolUse"] {
             let mut input = default_input(event);
             input.tool_name = Some("EnterPlanMode".into());
-            assert!(request(&input, None, 0.0).is_none(), "{event}/EnterPlanMode should be ignored");
+            assert!(request(&input, None, None, 0.0).is_none(), "{event}/EnterPlanMode should be ignored");
         }
     }
 
@@ -252,22 +286,22 @@ mod tests {
             for tool in ["Bash", "Read", "Edit", "Write"] {
                 let mut input = default_input(event);
                 input.tool_name = Some(tool.into());
-                assert!(request(&input, None, 0.0).is_none(), "{event}/{tool} should be ignored");
+                assert!(request(&input, None, None, 0.0).is_none(), "{event}/{tool} should be ignored");
             }
         }
     }
 
     #[test]
     fn tool_event_without_tool_name_is_ignored() {
-        assert!(request(&default_input("PreToolUse"), None, 0.0).is_none());
-        assert!(request(&default_input("PostToolUse"), None, 0.0).is_none());
+        assert!(request(&default_input("PreToolUse"), None, None, 0.0).is_none());
+        assert!(request(&default_input("PostToolUse"), None, None, 0.0).is_none());
     }
 
     #[test]
     fn ask_user_question_carries_kairos_session_id() {
         let mut input = default_input("PreToolUse");
         input.tool_name = Some("AskUserQuestion".into());
-        let req = request(&input, Some("kpty-1"), 1.0).unwrap();
+        let req = request(&input, Some("kpty-1"), None, 1.0).unwrap();
         let p: EventsPostParams = serde_json::from_value(req.params).unwrap();
         assert_eq!(p.kairos_session_id.as_deref(), Some("kpty-1"));
     }
@@ -281,13 +315,13 @@ mod tests {
     fn decodes_real_hook_json() {
         let json = br#"{"session_id":"abc","cwd":"/w/proj","transcript_path":"/t.jsonl","hook_event_name":"Stop"}"#;
         let input = serde_json::from_slice::<HookInput>(json).unwrap();
-        let req = request(&input, None, 5.0).unwrap();
+        let req = request(&input, None, None, 5.0).unwrap();
         assert_eq!(req.method, Method::EventsPost);
     }
 
     #[test]
     fn session_start_without_cwd_has_no_project() {
-        let req = request(&input("SessionStart", None, None), None, 1.0).unwrap();
+        let req = request(&input("SessionStart", None, None), None, None, 1.0).unwrap();
         let p: ActivitiesStartParams = serde_json::from_value(req.params).unwrap();
         assert!(p.project.is_none());
         assert!(p.metadata.is_none());
@@ -296,17 +330,17 @@ mod tests {
     #[test]
     fn kairos_session_id_rides_on_every_rpc() {
         let kid = "kpty-xyz";
-        let open = request(&default_input("SessionStart"), Some(kid), 1.0).unwrap();
+        let open = request(&default_input("SessionStart"), Some(kid), None, 1.0).unwrap();
         assert_eq!(
             serde_json::from_value::<ActivitiesStartParams>(open.params).unwrap().kairos_session_id.as_deref(),
             Some(kid)
         );
-        let submit = request(&default_input("UserPromptSubmit"), Some(kid), 1.0).unwrap();
+        let submit = request(&default_input("UserPromptSubmit"), Some(kid), None, 1.0).unwrap();
         assert_eq!(
             serde_json::from_value::<EventsPostParams>(submit.params).unwrap().kairos_session_id.as_deref(),
             Some(kid)
         );
-        let end = request(&default_input("SessionEnd"), Some(kid), 1.0).unwrap();
+        let end = request(&default_input("SessionEnd"), Some(kid), None, 1.0).unwrap();
         assert_eq!(
             serde_json::from_value::<ActivitiesStopParams>(end.params).unwrap().kairos_session_id.as_deref(),
             Some(kid)
@@ -315,13 +349,13 @@ mod tests {
 
     #[test]
     fn kairos_session_id_absent_when_unwrapped() {
-        let open = request(&default_input("SessionStart"), None, 1.0).unwrap();
+        let open = request(&default_input("SessionStart"), None, None, 1.0).unwrap();
         assert!(serde_json::from_value::<ActivitiesStartParams>(open.params).unwrap().kairos_session_id.is_none());
     }
 
     #[test]
     fn kairos_session_id_encodes_snake_case() {
-        let submit = request(&default_input("UserPromptSubmit"), Some("k1"), 1.0).unwrap();
+        let submit = request(&default_input("UserPromptSubmit"), Some("k1"), None, 1.0).unwrap();
         let json = serde_json::to_string(&submit.params).unwrap();
         assert!(json.contains("kairos_session_id"));
     }

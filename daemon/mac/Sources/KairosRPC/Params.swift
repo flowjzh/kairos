@@ -72,6 +72,18 @@ public struct ActivitiesEnsureParams: Codable, Sendable, Equatable {
     }
 }
 
+/// `activities.status` — per-session statusline payload for one activity,
+/// addressed by its `(source, external_id)` identity.
+public struct ActivitiesStatusParams: Codable, Sendable, Equatable {
+    public let source: String
+    public let externalId: String
+
+    public init(source: String, externalId: String) {
+        self.source = source
+        self.externalId = externalId
+    }
+}
+
 public struct EventsPostParams: Codable, Sendable, Equatable {
     public let activity: ActivityRef?
     public let kind: String

@@ -125,3 +125,40 @@ public struct FocusedGetResult: Codable, Sendable, Equatable {
 
     public init(activity: FocusedActivity?) { self.activity = activity }
 }
+
+/// One statusline field: a localized visible `label`, the `text` to show (nil
+/// when the field has no value, e.g. an activity with no title), and an optional
+/// stable color key the client maps to ANSI.
+public struct ActivityStatusField: Codable, Sendable, Equatable {
+    public let label: String
+    public let text: String?
+    public let color: String?
+
+    public init(label: String, text: String?, color: String?) {
+        self.label = label
+        self.text = text
+        self.color = color
+    }
+}
+
+/// `activities.status` result — a flat dict whose keys are either the four
+/// normal fields or a single `error` field, never both (a producer contract
+/// enforced in the daemon handler). All fields optional so nil keys are omitted
+/// on encode (matches Rust's per-field `skip_serializing_if`).
+public struct ActivityStatusResult: Codable, Sendable, Equatable {
+    /// The activity's display name (title ?? project), resolved daemon-side.
+    /// Labeled "Activity"/"活动".
+    public let activity: ActivityStatusField?
+    public let state: ActivityStatusField?
+    public let total: ActivityStatusField?
+    public let today: ActivityStatusField?
+    public let error: ActivityStatusField?
+
+    public init(activity: ActivityStatusField? = nil, state: ActivityStatusField? = nil, total: ActivityStatusField? = nil, today: ActivityStatusField? = nil, error: ActivityStatusField? = nil) {
+        self.activity = activity
+        self.state = state
+        self.total = total
+        self.today = today
+        self.error = error
+    }
+}

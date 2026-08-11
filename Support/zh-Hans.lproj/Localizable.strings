@@ -96,3 +96,14 @@
 /* Notifications (parametrized) */
 "Scheduled activity \"%@\" started — switched focus to it." = "定时活动“%@”已开始——已将焦点切换到它。";
 "Multiple active activities — focus switched to %@" = "存在多个活跃活动——已将焦点切换到 %@";
+
+/* Statusline (activities.status RPC) — field labels + state text. The three
+   states mirror the menu green-dot: focused (green) / gracing (light-green,
+   blur within grace) / idle (gray, not focused). */
+"Status" = "状态";
+"Total" = "总计";
+"Today" = "今天";
+"Error" = "错误";
+"Activity not found" = "未能找到对应的活动";
+"Focused" = "进行中";
+"Gracing" = "宽限中";

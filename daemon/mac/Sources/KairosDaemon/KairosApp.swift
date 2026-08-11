@@ -222,7 +222,7 @@ final class DaemonModel {
     /// An auto activity in its blur-grace window (light-green dot): a recent
     /// blur to void no focus has followed yet. Refocus within grace absorbs the
     /// blur; otherwise it stands once grace expires (ADR 39).
-    private(set) var gracePendingId: Int64?
+    private(set) var gracePending: Grace.Pending?
     private(set) var ongoingActivities: [ActivityRecord] = []
     private(set) var upcomingActivities: [ScheduledActivity] = []
     private(set) var manualTasks: [ActivityRecord] = []
@@ -288,6 +288,18 @@ final class DaemonModel {
         graceTimer = timer
     }
 
+    /// The menu dot color for an activity, via the shared `ActivityStatus`
+    /// classifier (the same one `activities.status` uses). `now` is read live so
+    /// a grace that elapses between refreshes still resolves correctly on the
+    /// next render; the grace/expiry timers exist to force that render.
+    func dotColor(_ id: Int64) -> Color {
+        switch ActivityStatus.derive(focused: focusedId, pending: gracePending, id: id, now: Date().timeIntervalSince1970, grace: AppSettings.grace) {
+        case .focused: return .green
+        case .gracing: return .green.opacity(0.4)
+        case .idle: return .gray
+        }
+    }
+
     func refresh() async {
         let now = Date().timeIntervalSince1970
         let events = (try? await store.loadGlobalEvents(since: now - Store.liveWindow)) ?? []
@@ -305,7 +317,7 @@ final class DaemonModel {
         isPaused = state.isPaused
         isAfk = state.isAfk
         focusedId = focused
-        gracePendingId = pending?.activityId
+        gracePending = pending
         armGraceTimer(pending: pending, now: now)
 
         if isAfk {
@@ -504,10 +516,7 @@ private struct MenuContent: View {
                                 HStack(spacing: 5) {
                                     Image(systemName: "circle.fill")
                                         .font(.system(size: 8))
-                                        .foregroundStyle(
-                                            model.focusedId == a.id ? Color.green :
-                                            model.gracePendingId == a.id ? Color.green.opacity(0.4) :
-                                            Color.gray)
+                                        .foregroundStyle(model.dotColor(a.id))
                                         .frame(width: iconColumn)
                                     Text(rowLabel(a)).lineLimit(1)
                                     Spacer(minLength: 4)
@@ -661,12 +670,14 @@ private struct MenuContent: View {
         }
     }
 
-    /// Row label: manual activities show their title. Auto activities show
-    /// `<source display name> - <suffix>`, where the suffix is the project if set,
-    /// else the command (e.g. a `pty` `ssh beth` → "Terminal - ssh beth").
+    /// Row label: manual activities show their title. Auto activities show the
+    /// title alone when set (a user-named session needs no source prefix);
+    /// otherwise `<source display name> - <project>` (e.g. a bare `pty` `ssh
+    /// beth` → "Terminal - ssh beth").
     private func rowLabel(_ a: ActivityRecord) -> String {
         if a.manual { return a.title ?? a.project ?? NSLocalizedString("Activity", comment: "") }
-        if let suffix = a.project ?? a.title, !suffix.isEmpty { return "\(a.displayName) - \(suffix)" }
+        if let title = a.title, !title.isEmpty { return title }
+        if let suffix = a.project, !suffix.isEmpty { return "\(a.displayName) - \(suffix)" }
         return a.displayName
     }
 

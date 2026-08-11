@@ -99,10 +99,12 @@ focus on the session is recorded too:
 
 ```sh
 kairos claude        # pairs the plugin's AI/Human split with real focus on this session
+kairos --title "Refactor auth" claude   # name the activity; shown in the menu/statusline
 ```
 
 Now, within the human window, only the time your terminal was genuinely on that
-session counts as interaction with it.
+session counts as interaction with it. `--title` (optional, composes with
+`--project`) names the activity instead of falling back to the project name.
 
 Each session's activity also carries its Claude **session id** as an `external_id`, so a
 timesheet can pinpoint exactly which session a block of time belonged to — see

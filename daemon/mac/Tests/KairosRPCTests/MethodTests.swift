@@ -20,5 +20,6 @@ struct MethodTests {
         #expect(Method.mappingSet.rawValue == "mapping.set")
         #expect(Method.segmentsGet.rawValue == "segments.get")
         #expect(Method.focusedGet.rawValue == "focused.get")
+        #expect(Method.activitiesStatus.rawValue == "activities.status")
     }
 }

@@ -14,6 +14,13 @@ binary) into the app under `Contents/Resources/plugins/claude-code/`. The releas
 app registers it as the `kairos` marketplace; the dev app stamps it to `kairos-dev`
 so the two never collide in `~/.claude/settings.json`.
 
+The binary has two modes, dispatched by argv[1]: the hook forwarder (no arg, as
+`hooks.json` invokes it) and `kairos-claude-code statusline` — the CC status line
+command, which reads `session_id` from stdin, queries `activities.status`, and
+renders one colored line via the shared `kairos-statusline` crate. `hooks.json`
+registers only the hook mode; the statusline mode is wired by the user's
+`statusLine.command` setting (see docs/07-clients.md).
+
 ## Dev loop: rebuild the app AND refresh Claude's cache
 
 Claude runs a **copy** of the binary from its own plugin cache

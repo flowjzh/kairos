@@ -16,4 +16,5 @@ public enum Method: String, Codable, Sendable {
     case mappingSet = "mapping.set"
     case segmentsGet = "segments.get"
     case focusedGet = "focused.get"
+    case activitiesStatus = "activities.status"
 }

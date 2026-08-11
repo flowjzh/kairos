@@ -34,23 +34,41 @@ fn pty_size() -> PtySize {
     PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
 }
 
-/// Run `cmd_args` under a PTY, returning the child's exit code. An optional
-/// leading `--project <slug>` associates the pty activity with that project
-/// (looked up / auto-registered by slug); with no `--project` the activity has
-/// no project and the menu shows the command instead.
+/// Split leading `--title <title>` / `--project <slug>` pairs (in any order)
+/// from the command and its args. The first non-flag token begins `cmd_args`,
+/// so `vim --title foo` hands `--title foo` through to vim. Returns the title
+/// and project only when their flag is present (None otherwise) — callers treat
+/// "absent" and "default" differently (the env passthrough fires only on an
+/// explicit `--title`, so `kairos claude` without it keeps title unset).
+fn split_flags(raw: &[String]) -> (Option<String>, Option<String>, &[String]) {
+    let mut title = None;
+    let mut project = None;
+    let mut i = 0;
+    while i + 1 < raw.len() {
+        match raw[i].as_str() {
+            "--title" => title = Some(raw[i + 1].clone()),
+            "--project" => project = Some(raw[i + 1].clone()),
+            _ => break,
+        }
+        i += 2;
+    }
+    (title, project, &raw[i..])
+}
+
+/// Run `cmd_args` under a PTY, returning the child's exit code. Optional leading
+/// `--title <title>` / `--project <slug>` (any order) name the activity and tag
+/// its project; with neither, the pty activity has no title/project and the menu
+/// shows the command instead.
 pub fn run(raw_args: &[String], socket_path: &str) -> u8 {
-    let (project, cmd_args): (Option<String>, &[String]) =
-        if raw_args.first().map(String::as_str) == Some("--project") {
-            (raw_args.get(1).cloned(), raw_args.get(2..).unwrap_or(&[]))
-        } else {
-            (None, raw_args)
-        };
+    let (title_flag, project, cmd_args) = split_flags(raw_args);
     if cmd_args.is_empty() {
-        eprintln!("usage: kairos [--project <slug>] <command> [args...]");
+        eprintln!("usage: kairos [--title <title>] [--project <slug>] <command> [args...]");
         return 2;
     }
     let session = uuid::Uuid::new_v4().to_string();
-    let title = cmd_args.join(" ");
+    // The pty activity's own title (shown when no agent hook claims the kid):
+    // the explicit `--title` if given, else the command string as before.
+    let pty_title = title_flag.clone().unwrap_or_else(|| cmd_args.join(" "));
 
     let pair = native_pty_system()
         .openpty(pty_size())
@@ -61,6 +79,12 @@ pub fn run(raw_args: &[String], socket_path: &str) -> u8 {
         cmd.arg(a);
     }
     cmd.env("KAIROS_SESSION_ID", &session);
+    // Only signal an explicit title: `kairos claude` (no `--title`) must leave
+    // this unset so the CC plugin keeps title None (its current behavior),
+    // rather than adopting the command string as a title.
+    if let Some(t) = &title_flag {
+        cmd.env("KAIROS_ACTIVITY_TITLE", t);
+    }
     // portable-pty defaults the child's cwd to $HOME; inherit ours so the child
     // (and its project attribution) sees the real launch directory.
     if let Ok(cwd) = std::env::current_dir() {
@@ -91,7 +115,7 @@ pub fn run(raw_args: &[String], socket_path: &str) -> u8 {
     {
         let reporter = Reporter::new(session.clone(), socket_path);
         let project = project.clone();
-        let title = title.clone();
+        let title = pty_title.clone();
         thread::spawn(move || {
             thread::sleep(ENSURE_DELAY);
             reporter.ensure(project.as_deref(), &title);
@@ -231,5 +255,63 @@ impl Reporter {
         if let Ok(value) = serde_json::to_value(&params) {
             self.send(Method::ActivitiesStop, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_flags;
+
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn title_only() {
+        let raw = owned(&["--title", "Foo", "vim"]);
+        let (title, project, cmd) = split_flags(&raw);
+        assert_eq!(title.as_deref(), Some("Foo"));
+        assert!(project.is_none());
+        assert_eq!(cmd, ["vim"]);
+    }
+
+    #[test]
+    fn title_and_project_compose_in_either_order() {
+        let cases = [
+            owned(&["--title", "Foo", "--project", "bar", "claude"]),
+            owned(&["--project", "bar", "--title", "Foo", "claude"]),
+        ];
+        for raw in cases {
+            let (title, project, cmd) = split_flags(&raw);
+            assert_eq!(title.as_deref(), Some("Foo"), "{raw:?}");
+            assert_eq!(project.as_deref(), Some("bar"), "{raw:?}");
+            assert_eq!(cmd, ["claude"], "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn flags_after_command_pass_through() {
+        // `vim --title foo` — the flag belongs to vim, not kairos.
+        let raw = owned(&["vim", "--title", "foo"]);
+        let (title, project, cmd) = split_flags(&raw);
+        assert!(title.is_none());
+        assert!(project.is_none());
+        assert_eq!(cmd, ["vim", "--title", "foo"]);
+    }
+
+    #[test]
+    fn title_without_command_is_empty() {
+        let raw = owned(&["--title", "Foo"]);
+        let (_title, _project, cmd) = split_flags(&raw);
+        assert!(cmd.is_empty());
+    }
+
+    #[test]
+    fn no_flags_passes_all_through() {
+        let raw = owned(&["claude", "--resume"]);
+        let (title, project, cmd) = split_flags(&raw);
+        assert!(title.is_none());
+        assert!(project.is_none());
+        assert_eq!(cmd, ["claude", "--resume"]);
     }
 }

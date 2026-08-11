@@ -85,6 +85,15 @@ segments.get   { from, to, project?, client? }
 
 focused.get    → { activity: {source, external_id, project, title} | null }   # the single focused activity (M4p3)
 
+activities.status  { source, external_id }
+  → { activity?, state?, total?, today? }   # statusline payload for one activity
+  | { error: {label, text, color} }          # e.g. activity not found
+  # activity is {label, text} — the resolved name (title ?? project), labeled
+  # "Activity". state is {label, text, color} where color ∈ green|light-green|gray
+  # (the menu green-dot: focused / gracing / idle). total/today are net-focus
+  # durations (since creation / since local midnight), text pre-formatted. error
+  # is mutually exclusive with the normal fields. labels + state.text localized.
+
 snapshots.create  { label?, from, to, params? }
   → { id, watermarks: {events, project_client_map}, segments_digest, generated_at }
   # drains the spool first; warns if spool non-empty after drain.

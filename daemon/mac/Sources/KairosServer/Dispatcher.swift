@@ -16,15 +16,20 @@ public struct Dispatcher: Sendable {
     /// (multiple backdrops) and plugin-initiated `notify.user`. Speaks the
     /// presentation type only — routing/throttle policy is resolved before this.
     let notify: @Sendable (NotificationContent) -> Void
+    /// Watermark-keyed cache backing `activities.status` — one rebuild per
+    /// ingested event instead of a full attribution per statusline poll.
+    let status: StatusIndex
 
     public init(
         sessions: SessionRegistry = SessionRegistry(),
         gate: NotificationGate = NotificationGate(),
-        notify: @escaping @Sendable (NotificationContent) -> Void = { _ in }
+        notify: @escaping @Sendable (NotificationContent) -> Void = { _ in },
+        status: StatusIndex = StatusIndex()
     ) {
         self.sessions = sessions
         self.gate = gate
         self.notify = notify
+        self.status = status
     }
 
     public func handle(
@@ -59,6 +64,7 @@ public struct Dispatcher: Sendable {
         case .mappingSet: return try await mappingSet(request, store: store)
         case .segmentsGet: return try await segmentsGet(request, store: store)
         case .focusedGet: return try await focusedGet(request, store: store, now: now)
+        case .activitiesStatus: return try await activitiesStatus(request, store: store, now: now)
         case .notifyUser: return try await notifyUser(request)
         }
     }
@@ -318,6 +324,51 @@ public struct Dispatcher: Sendable {
             project: record.project,
             title: record.title
         )))
+    }
+
+    /// `activities.status` — the statusline payload for one activity. The display
+    /// record (existence + name) is one indexed Store read; the state/totals come
+    /// from the `StatusIndex` cache (one rebuild per event, an O(1) live-tail read
+    /// otherwise), keeping the hot statusline poll off the heavy attribution path.
+    /// Not-found is a result with an `error` field, never a thrown `RPCError`.
+    private func activitiesStatus(_ request: RequestEnvelope, store: Store, now: @Sendable () -> Double) async throws -> JSONValue {
+        let p = try Wire.decodeValue(request.params, as: ActivitiesStatusParams.self)
+        guard let record = try await store.loadActivity(source: p.source, externalId: p.externalId) else {
+            return try Wire.encodeValue(ActivityStatusResult(error: ActivityStatusField(
+                label: NSLocalizedString("Error", comment: ""),
+                text: NSLocalizedString("Activity not found", comment: ""),
+                color: "red"
+            )))
+        }
+        let snap = await status.query(store: store, id: record.id, now: now())
+        let (stateColor, stateLabel) = stateDisplay(snap.state)
+        return try Wire.encodeValue(ActivityStatusResult(
+            activity: ActivityStatusField(label: NSLocalizedString("Activity", comment: ""), text: record.title ?? record.project, color: nil),
+            state: ActivityStatusField(label: NSLocalizedString("Status", comment: ""), text: stateLabel, color: stateColor),
+            total: ActivityStatusField(label: NSLocalizedString("Total", comment: ""), text: formatDuration(snap.total), color: nil),
+            today: ActivityStatusField(label: NSLocalizedString("Today", comment: ""), text: formatDuration(snap.today), color: nil)
+        ))
+    }
+
+    /// Map the shared `ActivityStatus` (KairosCore, no rendering vocabulary) to
+    /// the statusline's color-key + localized label.
+    private func stateDisplay(_ state: ActivityStatus) -> (color: String, label: String) {
+        switch state {
+        case .focused: return ("green", NSLocalizedString("Focused", comment: ""))
+        case .gracing: return ("light-green", NSLocalizedString("Gracing", comment: ""))
+        case .idle: return ("gray", NSLocalizedString("Idle", comment: ""))
+        }
+    }
+
+    /// Compact duration: `45m`, `1h23m`, `2d1h23m` (sub-minute rounds to `0m`).
+    private func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let d = total / 86_400
+        let h = (total % 86_400) / 3_600
+        let m = (total % 3_600) / 60
+        if d > 0 { return "\(d)d\(h)h\(m)m" }
+        if h > 0 { return "\(h)h\(m)m" }
+        return "\(m)m"
     }
 
     // MARK: Helpers

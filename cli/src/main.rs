@@ -62,8 +62,9 @@ fn dispatch(args: &[String], socket: &str, spool: &str) -> Result<u8, cli::CliEr
             Ok(2)
         }
         "pty" => Ok(pty::run(&args[1..], socket)),
-        // `kairos --project <slug> <cmd>` wraps <cmd> associated with a project.
-        "--project" => Ok(pty::run(args, socket)),
+        // `kairos --project <slug> <cmd>` / `--title <title> <cmd>` wrap <cmd>
+        // (both flags, in any order, handled inside `pty::run`).
+        "--project" | "--title" => Ok(pty::run(args, socket)),
         cmd if KNOWN_SUBCOMMANDS.contains(&cmd) => {
             cli::run(args, socket, spool)?;
             Ok(0)
@@ -89,7 +90,7 @@ fn dispatch(args: &[String], socket: &str, spool: &str) -> Result<u8, cli::CliEr
 fn usage() {
     eprintln!(
         "usage: kairos <activity|event|client|map|pause|owner|export> [opts]\n\
-         wrap a command under a PTY:  kairos <command> [args...]   (e.g. kairos claude)"
+         wrap a command under a PTY:  kairos [--title <title>] [--project <slug>] <command> [args...]   (e.g. kairos claude)"
     );
 }
 
@@ -146,6 +147,15 @@ mod tests {
     #[test]
     fn unknown_option_is_usage_error() {
         assert_eq!(dispatch(&["--bogus".into()], "/x", "/y"), Ok(2));
+    }
+
+    #[test]
+    fn title_flag_routes_to_pty_not_unknown_option() {
+        // `--title` with no command reaches pty::run, which prints its own usage
+        // (exit 2) — proving it did NOT hit the "unknown option" arm. A real
+        // `--title X vim` would spawn a PTY, which we can't do in a unit test;
+        // split_flags (pty.rs) covers the flag semantics.
+        assert_eq!(dispatch(&["--title".into(), "Foo".into()], "/x", "/y"), Ok(2));
     }
 
     #[test]

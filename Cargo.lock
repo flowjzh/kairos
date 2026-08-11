@@ -229,6 +229,7 @@ version = "0.1.0"
 dependencies = [
  "kairos-client",
  "kairos-codec",
+ "kairos-statusline",
  "serde",
  "serde_json",
 ]
@@ -264,6 +265,13 @@ name = "kairos-report"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "kairos-statusline"
+version = "0.1.0"
+dependencies = [
+ "kairos-codec",
 ]
 
 [[package]]

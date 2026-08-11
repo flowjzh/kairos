@@ -1,0 +1,8 @@
+[package]
+name = "kairos-statusline"
+version.workspace = true
+edition.workspace = true
+description = "Pure renderer for the activities.status result → a colored statusline string (shared by agent plugins)"
+
+[dependencies]
+kairos-codec = { path = "../codec" }

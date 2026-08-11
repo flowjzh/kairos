@@ -53,6 +53,14 @@ pub struct ActivitiesEnsureParams {
     pub ts: f64,
 }
 
+/// `activities.status` — per-session statusline payload for one activity,
+/// addressed by its `(source, external_id)` identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivitiesStatusParams {
+    pub source: String,
+    pub external_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventsPostParams {
     pub activity: Option<ActivityRef>,

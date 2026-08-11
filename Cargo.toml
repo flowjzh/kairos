@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libs/codec", "libs/client", "libs/report", "ffi", "cli", "plugins/claude-code"]
+members = ["libs/codec", "libs/client", "libs/report", "libs/statusline", "ffi", "cli", "plugins/claude-code"]
 
 [workspace.package]
 version = "0.1.0"

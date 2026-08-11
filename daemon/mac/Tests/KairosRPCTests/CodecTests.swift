@@ -155,6 +155,36 @@ struct CodecTests {
         #expect(r.activities["1"]?.project == "daemonclaw")
     }
 
+    @Test
+    func activitiesStatusResultRoundTrip() throws {
+        // Normal shape: four fields, nil `error` omitted on the wire.
+        let normal = ActivityStatusResult(
+            activity: ActivityStatusField(label: "活动", text: "kairos", color: nil),
+            state: ActivityStatusField(label: "状态", text: "空闲", color: "gray"),
+            total: ActivityStatusField(label: "总计", text: "1h23m", color: nil),
+            today: ActivityStatusField(label: "今天", text: "12m", color: nil)
+        )
+        let line = try LineCodec.encodeResponse(.result(try Wire.encodeValue(normal)))
+        #expect(!line.contains("\"error\""), "error key must be absent in normal shape")
+        let decoded = try LineCodec.decodeResponse(line)
+        guard case .result(let v) = decoded else {
+            Issue.record("expected result envelope")
+            return
+        }
+        let back = try Wire.decodeValue(v, as: ActivityStatusResult.self)
+        #expect(back.state?.color == "gray")
+        #expect(back.activity?.text == "kairos")
+        #expect(back.error == nil)
+
+        // Error shape: only the `error` key present.
+        let errored = ActivityStatusResult(
+            error: ActivityStatusField(label: "错误", text: "未能找到对应的活动", color: "red")
+        )
+        let errLine = try LineCodec.encodeResponse(.result(try Wire.encodeValue(errored)))
+        #expect(errLine.contains("\"error\""))
+        #expect(!errLine.contains("\"state\""))
+    }
+
     // MARK: Errors
 
     @Test

@@ -22,6 +22,7 @@ fn method_raw_values_match_spec() {
     assert_eq!(serde_json::to_value(Method::MappingSet).unwrap(), json!("mapping.set"));
     assert_eq!(serde_json::to_value(Method::SegmentsGet).unwrap(), json!("segments.get"));
     assert_eq!(serde_json::to_value(Method::FocusedGet).unwrap(), json!("focused.get"));
+    assert_eq!(serde_json::to_value(Method::ActivitiesStatus).unwrap(), json!("activities.status"));
 }
 
 // JSONValue fidelity → serde_json Value preserves int vs float.
@@ -221,6 +222,52 @@ fn segments_get_result_round_trip() {
         }
         _ => panic!("expected result envelope"),
     }
+}
+
+#[test]
+fn activities_status_result_round_trip() {
+    fn field(label: &str, text: Option<&str>, color: Option<&str>) -> ActivityStatusField {
+        ActivityStatusField {
+            label: label.into(),
+            text: text.map(str::to_string),
+            color: color.map(str::to_string),
+        }
+    }
+    // Normal shape: four keys, no `error`.
+    let normal = ActivityStatusResult {
+        activity: Some(field("活动", Some("kairos"), None)),
+        state: Some(field("状态", Some("空闲"), Some("gray"))),
+        total: Some(field("总计", Some("1h23m"), None)),
+        today: Some(field("今天", Some("12m"), None)),
+        error: None,
+    };
+    let resp = ResponseEnvelope::Result(serde_json::to_value(&normal).unwrap());
+    let line = encode_response(&resp).unwrap();
+    // Top-level Option fields are omitted when None: no `error` key in the
+    // normal shape. Within a field, `text`/`color` stay present as null.
+    assert!(!line.contains(r#""error""#), "error key must be absent in normal shape");
+    let back: ActivityStatusResult =
+        serde_json::from_value(match decode_response(&line).unwrap() {
+            ResponseEnvelope::Result(v) => v,
+            _ => panic!("expected result envelope"),
+        })
+        .unwrap();
+    assert_eq!(back.state.unwrap().color.as_deref(), Some("gray"));
+    assert_eq!(back.activity.unwrap().text.as_deref(), Some("kairos"));
+    assert!(back.error.is_none());
+
+    // Error shape: only the `error` key.
+    let errored = ActivityStatusResult {
+        activity: None,
+        state: None,
+        total: None,
+        today: None,
+        error: Some(field("错误", Some("未能找到对应的活动"), Some("red"))),
+    };
+    let line = encode_response(&ResponseEnvelope::Result(serde_json::to_value(&errored).unwrap())).unwrap();
+    assert!(line.contains(r#""error""#));
+    assert!(!line.contains(r#""state""#));
+    assert!(!line.contains(r#""total""#));
 }
 
 // Errors.

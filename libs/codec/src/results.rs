@@ -88,3 +88,34 @@ pub struct FocusedActivity {
 pub struct FocusedGetResult {
     pub activity: Option<FocusedActivity>,
 }
+
+/// One statusline field: a localized visible `label`, the `text` to show (None
+/// when the field has no value, e.g. an activity with no title), and an optional
+/// stable color key the client maps to ANSI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivityStatusField {
+    pub label: String,
+    pub text: Option<String>,
+    pub color: Option<String>,
+}
+
+/// `activities.status` result — a flat dict whose keys are either the four
+/// normal fields (`activity`/`state`/`total`/`today`) or a single `error` field,
+/// never both (a producer contract enforced in the daemon handler). Each `Option`
+/// field is omitted when `None`, yielding exactly that shape on the wire
+/// (per-field `skip_serializing_if` — portable across serde versions).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivityStatusResult {
+    /// The activity's display name (title ?? project), resolved daemon-side so
+    /// the renderer needs no fallback logic. Labeled "Activity"/"活动".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub activity: Option<ActivityStatusField>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub state: Option<ActivityStatusField>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub total: Option<ActivityStatusField>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub today: Option<ActivityStatusField>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<ActivityStatusField>,
+}
