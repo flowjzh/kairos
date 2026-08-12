@@ -116,8 +116,8 @@ The plugin also ships a **status-line** command: the current session renders liv
 Claude Code's status bar — `Activity: <name> [Focused|Gracing|Idle]` with total and
 today.
 
-<!-- TODO: replace with a real statusline screenshot -->
-<img width="972" alt="Kairos status line in Claude Code" src="assets/statusline.png" />
+<img width="484" height="46" alt="CC Plugin Status Line Example" src="https://github.com/user-attachments/assets/6308e5e2-4f0f-4d9a-8755-51e1d262e7cd" />
+
 
 Point the `statusLine` at the plugin binary (inside the app bundle) in your
 `.claude/settings.json`:
