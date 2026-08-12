@@ -110,6 +110,26 @@ Each session's activity also carries its Claude **session id** as an `external_i
 timesheet can pinpoint exactly which session a block of time belonged to — see
 [Timesheets](#timesheets).
 
+#### Status line
+
+The plugin also ships a **status-line** command: the current session renders live in
+Claude Code's status bar — `Activity: <name> [Focused|Gracing|Idle]` with total and
+today.
+
+<!-- TODO: replace with a real statusline screenshot -->
+<img width="972" alt="Kairos status line in Claude Code" src="assets/statusline.png" />
+
+Point the `statusLine` at the plugin binary (inside the app bundle) in your
+`.claude/settings.json`:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "/Applications/Kairos.app/Contents/Resources/plugins/claude-code/bin/kairos-claude-code statusline",
+  "refreshInterval": 15
+}
+```
+
 ## Privacy
 
 Kairos is local-first: all data lives in a SQLite file on your machine
